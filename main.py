@@ -1,57 +1,40 @@
-import numpy as np
-import pandas as pd
-from src.data_processing.load_data import load_data
-from src.data_processing.preprocess import prepare_time_series
-from src.data_processing.split_data import split_data
-from src.model.build_model import build_lstm_model
-from src.model.train import train_model
-from src.model.evaluate import evaluate_model
-from src.visualization.plot_results import plot_predictions
-from src.config import Config
+"""
+Главный исполняемый файл для прогнозирования временных рядов ОСО
+Использование: python main.py
+"""
+
+import warnings
+
+warnings.filterwarnings('ignore')
+
+from data_loader import DataLoader
+from model import create_model, plot_model_architecture
+from trainer import ModelTrainer
+from predictor import Predictor
+from utils import create_directories, print_dataset_info
+import config
 
 
 def main():
-    try:
-        print("1. Загрузка данных...")
-        data = load_data()
+    """
+    Основная функция программы
+    """
+    print("=" * 60)
+    print("ПРОГРАММА ПРОГНОЗИРОВАНИЯ ВРЕМЕННЫХ РЯДОВ ОСО")
+    print("=" * 60)
 
-        print("2. Подготовка временных рядов...")
-        X, y, x_scaler, y_scaler = prepare_time_series(data)
+    # Создание необходимых директорий
+    create_directories()
 
-        print("3. Разделение данных...")
-        X_train, X_test, y_train, y_test = split_data(X, y)
+    # 1. Загрузка и подготовка данных
+    print("\n1. ЗАГРУЗКА И ПОДГОТОВКА ДАННЫХ")
+    print("-" * 40)
 
-        print("4. Построение модели...")
-        model = build_lstm_model((X_train.shape[1], X_train.shape[2]))
+    data_loader = DataLoader()
 
-        print("5. Обучение модели...")
-        history = train_model(model, X_train, y_train)
+    if not data_loader.load_data():
+        print("Ошибка: Не удалось загрузить данные")
+        return
 
-        print("6. Оценка модели...")
-        metrics, y_test_orig, y_pred = evaluate_model(model, X_test, y_test, y_scaler)
-
-        print("\nМетрики модели:")
-        for name, value in metrics.items():
-            print(f"{name}: {value:.4f}")
-
-        print("7. Визуализация результатов...")
-        # Получаем годы для тестовой выборки
-        test_years = data[Config.TIME_COLUMN].values[-len(y_test_orig):]
-        plot_predictions(y_test_orig.flatten(), y_pred.flatten(), test_years)
-
-        print("8. Сохранение прогнозов...")
-        predictions_df = pd.DataFrame({
-            "Year": test_years,
-            "Actual": y_test_orig.flatten(),
-            "Predicted": y_pred.flatten()
-        })
-        predictions_df.to_csv(Config.PREDICTIONS_PATH, index=False)
-
-        print("Готово! Результаты сохранены в папке results.")
-
-    except Exception as e:
-        print(f"Произошла ошибка: {str(e)}")
-
-
-if __name__ == "__main__":
-    main()
+    if not data_loader.clean_data():
+        print("Ошибка: Не удалось
