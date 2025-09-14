@@ -1,11 +1,10 @@
 # src/model.py
+import logging
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l2
-import logging
-
-logger = logging.getLogger(__name__)
+from .logger_config import model_logger
 
 
 def create_model(input_dim=12):
@@ -13,7 +12,7 @@ def create_model(input_dim=12):
     Создает нейронную сеть для прогнозирования временных рядов
     Архитектура: 12 входов -> 24 -> 12 -> 6 -> 1 выход
     """
-    logger.info("Создание модели нейронной сети...")
+    model_logger.info("Создание модели нейронной сети...")
 
     model = Sequential()
 
@@ -42,7 +41,7 @@ def create_model(input_dim=12):
         metrics=['mae', 'mse']
     )
 
-    logger.info("Модель создана и скомпилирована")
-    model.summary(print_fn=logger.info)
+    model_logger.info("Модель создана и скомпилирована")
+    model.summary(print_fn=model_logger.info)
 
     return model

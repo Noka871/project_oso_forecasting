@@ -1,18 +1,21 @@
 # src/trainer.py
 import os
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 import logging
-
-logger = logging.getLogger(__name__)
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from .logger_config import training_logger
 
 
 def train_model(model, X_train, y_train, X_val, y_val,
-                model_save_path="../models/best_model.h5",
-                epochs=200, batch_size=8, patience=25):
+                model_save_path=None, epochs=200, batch_size=8, patience=25):
     """
     Обучение модели с callback'ами
     """
-    logger.info("Начало обучения модели...")
+    if model_save_path is None:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = os.path.join(current_dir, "..")
+        model_save_path = os.path.join(base_dir, "models", "best_model.h5")
+
+    training_logger.info("Начало обучения модели...")
 
     # Создаем директорию для моделей если не существует
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
@@ -35,19 +38,19 @@ def train_model(model, X_train, y_train, X_val, y_val,
         shuffle=False  # Для временных рядов не перемешиваем
     )
 
-    logger.info("Обучение завершено!")
+    training_logger.info("Обучение завершено!")
     return history
 
 
 def evaluate_model(model, X_test, y_test):
     """Оценка модели на тестовых данных"""
-    logger.info("Оценка модели на тестовых данных...")
+    training_logger.info("Оценка модели на тестовых данных...")
 
     results = model.evaluate(X_test, y_test, verbose=0)
     metrics = dict(zip(model.metrics_names, results))
 
-    logger.info("Результаты оценки:")
+    training_logger.info("Результаты оценки:")
     for metric, value in metrics.items():
-        logger.info(f"{metric}: {value:.4f}")
+        training_logger.info(f"{metric}: {value:.4f}")
 
     return metrics
