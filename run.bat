@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 
 echo Установка/проверка зависимостей...
-pip install customtkinter darkdetect pandas numpy matplotlib scikit-learn tensorflow Pillow
+pip install -r requirements.txt
 
 echo Запуск современного интерфейса...
 python main.py
