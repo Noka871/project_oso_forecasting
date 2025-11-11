@@ -5,6 +5,7 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv1D, LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
+from utils.logger import log_function_call, log_model_training, logger
 
 
 class OzoneHybridModel:
@@ -13,22 +14,20 @@ class OzoneHybridModel:
         self.is_trained = False
         self.metrics = {}
         self.history = None
+        logger.info("Инициализирована модель OzoneHybridModel")
 
     def build_model(self, input_shape):
         """Создание гибридной модели Conv1D + LSTM"""
+        logger.info(f"Построение модели с входной формой: {input_shape}")
+
         model = Sequential([
-            # Сверточный слой для локальных паттернов
             Conv1D(filters=64, kernel_size=3, activation='relu',
                    input_shape=input_shape),
-
-            # Рекуррентный слой для временных зависимостей
             LSTM(128, return_sequences=False),
-
-            # Полносвязные слои
             Dense(64, activation='relu'),
             Dropout(0.3),
             Dense(32, activation='relu'),
-            Dense(1)  # Выход - прогноз ОСО
+            Dense(1)
         ])
 
         model.compile(
@@ -37,11 +36,14 @@ class OzoneHybridModel:
             metrics=['mae']
         )
 
+        logger.info("Модель успешно скомпилирована")
         return model
 
+    @log_function_call
     def prepare_data(self, data, sequence_length=12):
         """Подготовка данных для обучения"""
         values = data['oso'].values
+        logger.info(f"Подготовка данных: {len(values)} точек, длина последовательности: {sequence_length}")
 
         X, y = [], []
         for i in range(len(values) - sequence_length):
@@ -51,11 +53,12 @@ class OzoneHybridModel:
         X = np.array(X)
         y = np.array(y)
 
-        # Reshape для Conv1D [samples, time_steps, features]
         X = X.reshape((X.shape[0], X.shape[1], 1))
 
+        logger.info(f"Данные подготовлены: X.shape={X.shape}, y.shape={y.shape}")
         return X, y
 
+    @log_model_training("OzoneHybridModel (Conv1D + LSTM)")
     def train(self, data, epochs=50, validation_split=0.2):
         """Обучение модели"""
         try:
@@ -67,12 +70,12 @@ class OzoneHybridModel:
             X_train, X_val = X[:split_idx], X[split_idx:]
             y_train, y_val = y[:split_idx], y[split_idx:]
 
+            logger.info(f"Разделение данных: train={X_train.shape}, validation={X_val.shape}")
+
             # Построение модели
             self.model = self.build_model((X_train.shape[1], X_train.shape[2]))
 
-            print("Начало обучения гибридной модели...")
-            print(f"Размер тренировочных данных: {X_train.shape}")
-            print(f"Размер валидационных данных: {X_val.shape}")
+            logger.info(f"Начало обучения на {epochs} эпох")
 
             # Обучение
             self.history = self.model.fit(
@@ -80,11 +83,14 @@ class OzoneHybridModel:
                 validation_data=(X_val, y_val),
                 epochs=epochs,
                 batch_size=32,
-                verbose=0
+                verbose=0,
+                callbacks=[TrainingLoggerCallback()]
             )
 
             # Оценка модели
+            logger.info("Оценка качества модели...")
             y_pred = self.model.predict(X_val)
+
             self.metrics = {
                 'mae': mean_absolute_error(y_val, y_pred),
                 'rmse': np.sqrt(mean_squared_error(y_val, y_pred)),
@@ -93,31 +99,33 @@ class OzoneHybridModel:
 
             self.is_trained = True
 
-            print("Обучение завершено!")
-            print(f"Метрики - MAE: {self.metrics['mae']:.3f}, RMSE: {self.metrics['rmse']:.3f}")
+            logger.info(f"Обучение завершено! Метрики: MAE={self.metrics['mae']:.3f}, RMSE={self.metrics['rmse']:.3f}")
 
             return self.history
 
         except Exception as e:
-            print(f"Ошибка обучения: {str(e)}")
-            # В случае ошибки создаем заглушку
+            logger.error(f"Ошибка обучения модели: {str(e)}")
             self._create_stub_model()
             return None
 
     def _create_stub_model(self):
         """Создание заглушки для демонстрации"""
+        logger.warning("Создание демонстрационной модели (заглушки)")
         self.metrics = {
             'mae': 2.1,
             'rmse': 3.4,
             'accuracy': 0.952
         }
         self.is_trained = True
-        print("Создана демонстрационная модель")
 
+    @log_function_call
     def forecast(self, periods=12):
-        """Прогнозирование на future периоды"""
+        """Прогнозирование"""
         if not self.is_trained:
+            logger.error("Попытка прогнозирования без обученной модели")
             raise Exception("Модель не обучена! Сначала вызовите train()")
+
+        logger.info(f"Выполнение прогноза на {periods} периодов")
 
         # Для демонстрации создаем реалистичный прогноз
         base_value = 300
@@ -127,13 +135,20 @@ class OzoneHybridModel:
 
         forecast = base_value + trend * np.arange(periods) + seasonal + noise
 
+        logger.info(f"Прогноз выполнен: среднее значение={np.mean(forecast):.1f}")
+
         return forecast
 
-    def get_model_summary(self):
-        """Получение информации о модели"""
-        if self.model:
-            summary = []
-            self.model.summary(print_fn=lambda x: summary.append(x))
-            return "\n".join(summary)
-        else:
-            return "Модель не построена"
+
+class TrainingLoggerCallback(tf.keras.callbacks.Callback):
+    """Кастомный callback для логирования процесса обучения"""
+
+    def on_epoch_end(self, epoch, logs=None):
+        if epoch % 10 == 0:  # Логируем каждые 10 эпох
+            logger.debug(f"Эпоха {epoch}: loss={logs['loss']:.4f}, val_loss={logs['val_loss']:.4f}")
+
+    def on_train_begin(self, logs=None):
+        logger.info("🎯 Начало обучения нейросети")
+
+    def on_train_end(self, logs=None):
+        logger.info("🏁 Обучение нейросети завершено")
