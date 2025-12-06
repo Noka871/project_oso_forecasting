@@ -1,50 +1,40 @@
 @echo off
 chcp 65001 >nul
-echo ========================================
-echo   Запуск OSO Forecasting Application
-echo ========================================
-echo.
 
-REM Проверка Python
+echo ========================================
+echo   OSO Forecasting Application
+echo ========================================
+
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo Ошибка: Python не найден!
-    echo Установите Python 3.8 или выше
+    echo Error: Python not found
     pause
     exit /b 1
 )
 
-REM Проверка и установка зависимостей
-echo Установка/проверка зависимостей...
+echo Installing dependencies...
 pip install -r requirements.txt
 
 if errorlevel 1 (
-    echo Ошибка при установке зависимостей!
+    echo Error installing dependencies
     pause
     exit /b 1
 )
 
-REM Создание необходимых папок
-echo Создание структуры папок...
+echo Creating folders...
 if not exist "data\predictions" mkdir data\predictions
 if not exist "trained_models" mkdir trained_models
 if not exist "logs" mkdir logs
 
-REM Обновление pip (опционально)
 echo.
-echo Обновление pip (рекомендуется)...
-python -m pip install --upgrade pip
+echo ========================================
+echo   Starting application...
+echo ========================================
+echo.
 
-REM Запуск приложения
-echo.
-echo ========================================
-echo   Запуск приложения...
-echo ========================================
-echo.
 python main.py
 
 if errorlevel 1 (
-    echo.
-    echo Приложение завершилось с ошибкой
+    echo Application ended with error
     pause
 )
