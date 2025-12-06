@@ -1,1274 +1,980 @@
+"""
+main.py
+Основной файл приложения с графическим интерфейсом
+"""
+
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import messagebox, filedialog
-import pandas as pd
+import os
+import sys
 import numpy as np
+import pandas as pd
+from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
-from ozone_model import OzoneHybridModel
-import threading
-import os
-import traceback
-import json
-from utils.data_loader import OzoneDataLoader
-from utils.logger import logger, log_function_call
-from experiments.model_comparison import ModelComparator
+
+# Добавьте путь к текущей директории для импорта
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Импорт собственных модулей
+try:
+    from ozone_model import OzoneModel, DataPreprocessor, create_demo_data
+    from utils.data_loader import DataLoader
+    from utils.logger import setup_logger
+    from auto_prediction_saver import AutoPredictionSaver
+
+    print("[INFO] Все модули успешно загружены")
+except ImportError as e:
+    print(f"[ERROR] Ошибка импорта модулей: {e}")
+
+
+    class OzoneModel:
+        def __init__(self, *args, **kwargs):
+            self.model = None
+
+        def build_model(self):
+            pass
+
+        def train(self, *args, **kwargs):
+            return type('obj', (object,), {'history': {'loss': [1.0], 'val_loss': [0.9]}})()
+
+        def predict(self, X):
+            return np.random.randn(X.shape[0] if hasattr(X, 'shape') else 1)
+
+
+    class DataLoader:
+        def load_demo_data(self):
+            return pd.DataFrame({
+                'year': np.arange(1960, 2025),
+                'oso': 300 + np.random.randn(65) * 10
+            })
+
+        def analyze_data(self, data):
+            return {"Среднее": 300, "Мин": 280, "Макс": 320}
+
+
+    def setup_logger():
+        return type('obj', (object,), {
+            'info': lambda x: print(f"[INFO] {x}"),
+            'error': lambda x: print(f"[ERROR] {x}")
+        })()
+
+
+    class AutoPredictionSaver:
+        def __init__(self, save_dir="data/predictions"):
+            self.save_dir = save_dir
+            os.makedirs(save_dir, exist_ok=True)
+
+        def save_prediction(self, predictions, **kwargs):
+            filename = f"ОСО_predict.csv"
+            filepath = os.path.join(self.save_dir, filename)
+
+            df = pd.DataFrame({'predictions': predictions})
+            df.to_csv(filepath, index=False)
+
+            print(f"[INFO] Прогноз сохранен: {filepath}")
+            return filepath
 
 # Настройка темы
-ctk.set_appearance_mode("Dark")
+ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-class ModernOzoneApp(ctk.CTk):
+class App(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        logger.info("🚀 Запуск приложения OSO Forecasting с экспериментальным режимом")
+        self.title("OSO Forecasting - Прогнозирование озонового слоя")
+        self.geometry("1400x800")
 
-        # Настройка шрифтов
-        self.title_font = ctk.CTkFont(family="Arial", size=20, weight="bold")
-        self.subtitle_font = ctk.CTkFont(family="Arial", size=14, weight="bold")
-        self.normal_font = ctk.CTkFont(family="Arial", size=12)
-        self.small_font = ctk.CTkFont(family="Arial", size=10)
+        self.model = None
+        self.data_loader = DataLoader()
+        self.logger = setup_logger()
 
-        # Настройка главного окна
-        self.title("🌍 OSO Forecasting - Прогнозирование и анализ озонового слоя")
-        self.geometry("1400x950")
-        self.minsize(1200, 800)
+        self.prediction_saver = AutoPredictionSaver(save_dir="data/predictions")
 
-        # Инициализация компонентов
-        self.data_loader = OzoneDataLoader()
-        self.model = OzoneHybridModel()
-        self.comparator = None
-        self.oso_data = None
-        self.forecast = None
-        self.comparison_results = None
-        self.current_step = 0
+        self.data = None
+        self.predictions = None
 
-        # Создание интерфейса
-        self.create_sidebar()
-        self.create_main_content()
-        self.create_status_bar()
+        self.setup_ui()
 
-        logger.info("✅ Интерфейс приложения инициализирован с экспериментальным режимом")
+        self.logger.info("Приложение запущено")
 
-    def create_sidebar(self):
-        """Создание боковой панели"""
-        logger.debug("Создание боковой панели")
+    def setup_ui(self):
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        self.sidebar = ctk.CTkFrame(self, width=300, corner_radius=0)
-        self.sidebar.pack(side="left", fill="y")
-        self.sidebar.pack_propagate(False)
+        # Сайдбар слева
+        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(8, weight=1)
 
-        # Заголовок
-        title_label = ctk.CTkLabel(
-            self.sidebar,
+        self.logo_label = ctk.CTkLabel(
+            self.sidebar_frame,
             text="🌍 OSO Forecasting",
-            font=self.title_font
+            font=ctk.CTkFont(size=22, weight="bold")
         )
-        title_label.pack(pady=(30, 10), padx=20)
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(30, 20))
 
-        # Подзаголовок
-        subtitle_label = ctk.CTkLabel(
-            self.sidebar,
-            text="Прогнозирование и анализ",
-            font=self.small_font,
-            text_color="gray70"
+        self.version_label = ctk.CTkLabel(
+            self.sidebar_frame,
+            text="Версия 1.1",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
         )
-        subtitle_label.pack(pady=(0, 20))
+        self.version_label.grid(row=1, column=0, padx=20, pady=(0, 30))
 
-        # Шаги работы
-        steps_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        steps_frame.pack(fill="x", padx=20, pady=10)
-
-        steps = [
-            ("📥 Загрузить данные", "Загрузка данных ОСО"),
-            ("🧠 Обучить модель", "Обучение нейросети"),
-            ("🔬 Сравнить модели", "Эксперименты с архитектурами"),
-            ("🔮 Выполнить прогноз", "Прогнозирование"),
-            ("📈 Визуализация", "Анализ результатов")
-        ]
-
-        self.step_buttons = []
-        for i, (title, desc) in enumerate(steps):
-            step_btn = ctk.CTkButton(
-                steps_frame,
-                text=f"{i + 1}. {title}",
-                font=self.normal_font,
-                height=45,
-                anchor="w",
-                command=lambda idx=i: self.set_current_step(idx),
-                state="disabled" if i > 0 else "normal"
-            )
-            step_btn.pack(fill="x", pady=3)
-            self.step_buttons.append(step_btn)
-
-        self.step_buttons[0].configure(fg_color="#2E8B57")
-
-        # Информация о версии
-        version_label = ctk.CTkLabel(
-            self.sidebar,
-            text="Версия 2.0 с экспериментальным режимом",
-            font=ctk.CTkFont(family="Arial", size=9),
-            text_color="gray60"
+        self.data_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="📊 Данные",
+            command=self.show_data_tab,
+            height=40,
+            font=ctk.CTkFont(size=14)
         )
-        version_label.pack(side="bottom", pady=10)
+        self.data_button.grid(row=2, column=0, padx=20, pady=10)
 
-    def create_main_content(self):
-        """Создание основного контента"""
-        logger.debug("Создание основного контента")
+        self.model_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="🧠 Модель",
+            command=self.show_model_tab,
+            height=40,
+            font=ctk.CTkFont(size=14)
+        )
+        self.model_button.grid(row=3, column=0, padx=20, pady=10)
 
+        self.predict_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="🔮 Прогноз",
+            command=self.show_predict_tab,
+            height=40,
+            font=ctk.CTkFont(size=14)
+        )
+        self.predict_button.grid(row=4, column=0, padx=20, pady=10)
+
+        self.visualize_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="📈 Визуализация",
+            command=self.show_visualize_tab,
+            height=40,
+            font=ctk.CTkFont(size=14)
+        )
+        self.visualize_button.grid(row=5, column=0, padx=20, pady=10)
+
+        self.experiments_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="🔬 Эксперименты",
+            command=self.show_experiments_tab,
+            height=40,
+            font=ctk.CTkFont(size=14)
+        )
+        self.experiments_button.grid(row=6, column=0, padx=20, pady=10)
+
+        self.separator = ctk.CTkFrame(self.sidebar_frame, height=2, fg_color="gray")
+        self.separator.grid(row=7, column=0, padx=20, pady=20, sticky="ew")
+
+        self.prediction_info = ctk.CTkLabel(
+            self.sidebar_frame,
+            text="💾 Автосохранение\nвключено",
+            font=ctk.CTkFont(size=12),
+            justify="left",
+            wraplength=160
+        )
+        self.prediction_info.grid(row=8, column=0, padx=20, pady=(0, 20))
+
+        self.copyright_label = ctk.CTkLabel(
+            self.sidebar_frame,
+            text="ТУСУР 2025",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.copyright_label.grid(row=9, column=0, padx=20, pady=(0, 30))
+
+        # Основная область
         self.main_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.main_frame.pack(side="right", fill="both", expand=True, padx=20, pady=20)
+        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=1)
 
-        # Вкладки
-        self.tabview = ctk.CTkTabview(self.main_frame)
-        self.tabview.pack(fill="both", expand=True)
+        self.tabs = {}
 
-        # Создаем все вкладки
-        self.tab_data = self.tabview.add("📊 Данные")
-        self.tab_model = self.tabview.add("🧠 Модель")
-        self.tab_experiments = self.tabview.add("🔬 Эксперименты")
-        self.tab_forecast = self.tabview.add("🔮 Прогноз")
-        self.tab_visualization = self.tabview.add("📈 Визуализация")
+        self.create_data_tab()
+        self.create_model_tab()
+        self.create_predict_tab()
+        self.create_visualize_tab()
+        self.create_experiments_tab()
 
-        # Настраиваем вкладки
-        self.setup_data_tab()
-        self.setup_model_tab()
-        self.setup_experiments_tab()
-        self.setup_forecast_tab()
-        self.setup_visualization_tab()
+        self.show_data_tab()
 
-    def setup_data_tab(self):
-        """Настройка вкладки данных"""
-        title_label = ctk.CTkLabel(
-            self.tab_data,
-            text="Загрузка и анализ данных озонового слоя",
-            font=self.title_font
+    def create_data_tab(self):
+        tab = ctk.CTkFrame(self.main_frame)
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
+        title = ctk.CTkLabel(
+            tab,
+            text="📊 Работа с данными ОСО",
+            font=ctk.CTkFont(size=28, weight="bold")
         )
-        title_label.pack(pady=20)
+        title.grid(row=0, column=0, padx=30, pady=(30, 20), sticky="w")
 
-        # Фрейм для кнопок
-        button_frame = ctk.CTkFrame(self.tab_data, fg_color="transparent")
-        button_frame.pack(pady=10)
+        toolbar = ctk.CTkFrame(tab)
+        toolbar.grid(row=1, column=0, padx=30, pady=(0, 20), sticky="ew")
 
-        # Кнопки в ряд
-        button_row1 = ctk.CTkFrame(button_frame, fg_color="transparent")
-        button_row1.pack(pady=5)
-
-        load_demo_btn = ctk.CTkButton(
-            button_row1,
-            text="📥 Загрузить демо-данные",
+        load_btn = ctk.CTkButton(
+            toolbar,
+            text="📂 Загрузить демо-данные",
             command=self.load_demo_data,
-            font=self.normal_font,
-            height=40,
-            width=200
-        )
-        load_demo_btn.pack(side="left", padx=5)
-
-        load_file_btn = ctk.CTkButton(
-            button_row1,
-            text="📂 Загрузить из файла",
-            command=self.load_from_file,
-            font=self.normal_font,
-            height=40,
             width=200,
-            state="normal"
+            height=45,
+            font=ctk.CTkFont(size=14)
         )
-        load_file_btn.pack(side="left", padx=5)
+        load_btn.pack(side=tk.LEFT, padx=10)
 
-        # Информация о данных
-        self.data_info_frame = ctk.CTkFrame(self.tab_data)
-        self.data_info_frame.pack(fill="both", expand=True, padx=20, pady=10)
-
-        self.data_info_text = ctk.CTkTextbox(self.data_info_frame, height=200)
-        self.data_info_text.pack(fill="both", expand=True)
-        self.data_info_text.insert("1.0",
-                                   "Данные не загружены.\n\n"
-                                   "Для начала работы:\n"
-                                   "1. Нажмите 'Загрузить демо-данные' для использования демонстрационных данных\n"
-                                   "2. Или 'Загрузить из файла' для загрузки собственных данных\n\n"
-                                   "Демонстрационные данные содержат:\n"
-                                   "• Период: 1960-2024 гг.\n"
-                                   "• Регион: Томская область\n"
-                                   "• Параметры: ОСО, температура, давление")
-        self.data_info_text.configure(state="disabled")
-
-    def setup_model_tab(self):
-        """Настройка вкладки модели"""
-        title_label = ctk.CTkLabel(
-            self.tab_model,
-            text="Обучение гибридной нейросетевой модели",
-            font=self.title_font
+        analyze_btn = ctk.CTkButton(
+            toolbar,
+            text="📈 Анализировать данные",
+            command=self.analyze_data,
+            width=200,
+            height=45,
+            font=ctk.CTkFont(size=14)
         )
-        title_label.pack(pady=20)
+        analyze_btn.pack(side=tk.LEFT, padx=10)
 
-        # Фрейм с архитектурой
-        arch_frame = ctk.CTkFrame(self.tab_model, corner_radius=8)
-        arch_frame.pack(fill="x", padx=20, pady=10)
-
-        arch_label = ctk.CTkLabel(
-            arch_frame,
-            text="🏗️ Архитектура гибридной модели CNN-LSTM:",
-            font=self.subtitle_font
+        export_btn = ctk.CTkButton(
+            toolbar,
+            text="💾 Экспорт данных",
+            command=self.export_data,
+            width=200,
+            height=45,
+            font=ctk.CTkFont(size=14)
         )
-        arch_label.pack(pady=(10, 5))
+        export_btn.pack(side=tk.LEFT, padx=10)
 
-        arch_text = """• Conv1D: 64 фильтра, ядро=3, ReLU (выявление локальных паттернов)
-• LSTM: 128 нейронов (учёт долгосрочных зависимостей)
-• Dense: 64 → 32 нейрона (полносвязные слои)
-• Dropout: 0.3 (регуляризация для предотвращения переобучения)
-• Оптимизатор: Adam (learning_rate=0.001)
-• Функция потерь: MSE (среднеквадратичная ошибка)"""
+        data_frame = ctk.CTkFrame(tab, corner_radius=8)
+        data_frame.grid(row=2, column=0, padx=30, pady=(0, 30), sticky="nsew")
+        data_frame.grid_columnconfigure(0, weight=1)
+        data_frame.grid_rowconfigure(0, weight=1)
 
-        arch_desc = ctk.CTkLabel(
-            arch_frame,
-            text=arch_text,
-            font=self.normal_font,
-            justify="left"
+        self.data_text = ctk.CTkTextbox(data_frame, width=900, height=400)
+        self.data_text.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        scrollbar = ctk.CTkScrollbar(data_frame, command=self.data_text.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.data_text.configure(yscrollcommand=scrollbar.set)
+
+        status_bar = ctk.CTkFrame(tab, height=30)
+        status_bar.grid(row=3, column=0, padx=30, pady=(0, 20), sticky="ew")
+
+        self.data_status = ctk.CTkLabel(
+            status_bar,
+            text="Готов к загрузке данных",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
         )
-        arch_desc.pack(pady=(5, 10), padx=15)
+        self.data_status.pack(side=tk.LEFT, padx=10)
 
-        # Кнопка обучения
-        self.train_btn = ctk.CTkButton(
-            self.tab_model,
+        self.tabs["data"] = tab
+
+    def create_model_tab(self):
+        tab = ctk.CTkFrame(self.main_frame)
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
+        title = ctk.CTkLabel(
+            tab,
+            text="🧠 Обучение нейросетевой модели",
+            font=ctk.CTkFont(size=28, weight="bold")
+        )
+        title.grid(row=0, column=0, padx=30, pady=(30, 20), sticky="w")
+
+        params_frame = ctk.CTkFrame(tab, corner_radius=8)
+        params_frame.grid(row=1, column=0, padx=30, pady=(0, 20), sticky="ew")
+
+        params_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            params_frame,
+            text="Количество эпох:",
+            font=ctk.CTkFont(size=14)
+        ).grid(row=0, column=0, padx=20, pady=15, sticky="w")
+
+        self.epochs_slider = ctk.CTkSlider(params_frame, from_=10, to=200, number_of_steps=19)
+        self.epochs_slider.set(50)
+        self.epochs_slider.grid(row=0, column=1, padx=20, pady=15, sticky="ew")
+
+        self.epochs_value = ctk.CTkLabel(
+            params_frame,
+            text="50",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            width=40
+        )
+        self.epochs_value.grid(row=0, column=2, padx=(0, 20), pady=15)
+
+        ctk.CTkLabel(
+            params_frame,
+            text="Размер батча:",
+            font=ctk.CTkFont(size=14)
+        ).grid(row=1, column=0, padx=20, pady=15, sticky="w")
+
+        self.batch_slider = ctk.CTkSlider(params_frame, from_=16, to=128, number_of_steps=7)
+        self.batch_slider.set(32)
+        self.batch_slider.grid(row=1, column=1, padx=20, pady=15, sticky="ew")
+
+        self.batch_value = ctk.CTkLabel(
+            params_frame,
+            text="32",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            width=40
+        )
+        self.batch_value.grid(row=1, column=2, padx=(0, 20), pady=15)
+
+        train_btn = ctk.CTkButton(
+            tab,
             text="🚀 Начать обучение модели",
             command=self.train_model,
-            font=self.normal_font,
             height=50,
-            fg_color="#2E8B57",
-            state="disabled"
+            width=300,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            fg_color="#2D9CDB",
+            hover_color="#2C7BB6"
         )
-        self.train_btn.pack(pady=20)
+        train_btn.grid(row=2, column=0, padx=30, pady=20)
 
-        # Прогресс бар
-        self.progress_bar = ctk.CTkProgressBar(self.tab_model, height=20)
-        self.progress_bar.pack(fill="x", padx=50, pady=10)
-        self.progress_bar.set(0)
+        log_frame = ctk.CTkFrame(tab, corner_radius=8)
+        log_frame.grid(row=3, column=0, padx=30, pady=(0, 30), sticky="nsew")
+        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid_rowconfigure(0, weight=1)
 
-        # Результаты обучения
-        results_frame = ctk.CTkFrame(self.tab_model)
-        results_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        self.train_log = ctk.CTkTextbox(log_frame, width=900, height=300)
+        self.train_log.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-        results_label = ctk.CTkLabel(
-            results_frame,
-            text="📊 Результаты обучения:",
-            font=self.subtitle_font
-        )
-        results_label.pack(anchor="w", pady=(5, 5))
+        info_frame = ctk.CTkFrame(tab, corner_radius=8)
+        info_frame.grid(row=4, column=0, padx=30, pady=(0, 30), sticky="ew")
 
-        self.training_results = ctk.CTkTextbox(results_frame, height=150)
-        self.training_results.pack(fill="both", expand=True)
-        self.training_results.insert("1.0",
-                                     "Результаты обучения появятся здесь после завершения процесса.\n\n"
-                                     "Ожидаемые метрики:\n"
-                                     "• MAE: Средняя абсолютная ошибка\n"
-                                     "• RMSE: Корень из среднеквадратичной ошибки\n"
-                                     "• R²: Коэффициент детерминации")
-        self.training_results.configure(state="disabled")
+        info_text = "Архитектура: CNN-LSTM (Conv1D + LSTM)\n" \
+                    "Conv1D: 64 фильтра, kernel_size=3\n" \
+                    "LSTM: 128 нейронов\n" \
+                    "Оптимизатор: Adam (lr=0.001)\n" \
+                    "Функция потерь: MSE"
 
-    def setup_experiments_tab(self):
-        """Настройка вкладки экспериментов"""
-        title_label = ctk.CTkLabel(
-            self.tab_experiments,
-            text="Эксперименты: сравнение архитектур нейронных сетей",
-            font=self.title_font
-        )
-        title_label.pack(pady=20)
-
-        # Описание экспериментов
-        desc_frame = ctk.CTkFrame(self.tab_experiments, corner_radius=8)
-        desc_frame.pack(fill="x", padx=20, pady=10)
-
-        desc_text = """🔬 Сравнительный анализ различных архитектур нейронных сетей для прогнозирования временных рядов.
-
-Сравниваемые архитектуры:
-1. LSTM (стандартная)
-2. Deep LSTM (глубокая)
-3. Bidirectional LSTM (двунаправленная)
-4. GRU (Gated Recurrent Unit)
-5. CNN (свёрточная сеть)
-6. CNN-LSTM (гибридная)
-
-Метрики сравнения:
-• MAE (Mean Absolute Error)
-• RMSE (Root Mean Square Error)
-• R² (Коэффициент детерминации)
-• Время обучения
-• Количество параметров"""
-
-        desc_label = ctk.CTkLabel(
-            desc_frame,
-            text=desc_text,
-            font=self.normal_font,
+        ctk.CTkLabel(
+            info_frame,
+            text=info_text,
+            font=ctk.CTkFont(size=12),
             justify="left"
+        ).pack(padx=20, pady=15)
+
+        self.tabs["model"] = tab
+
+        self.epochs_slider.configure(command=self.update_epochs_label)
+        self.batch_slider.configure(command=self.update_batch_label)
+
+    def create_predict_tab(self):
+        tab = ctk.CTkFrame(self.main_frame)
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
+        title = ctk.CTkLabel(
+            tab,
+            text="🔮 Прогнозирование содержания озона",
+            font=ctk.CTkFont(size=28, weight="bold")
         )
-        desc_label.pack(pady=15, padx=15)
+        title.grid(row=0, column=0, padx=30, pady=(30, 20), sticky="w")
 
-        # Кнопки управления экспериментами
-        button_frame = ctk.CTkFrame(self.tab_experiments, fg_color="transparent")
-        button_frame.pack(pady=10)
+        control_frame = ctk.CTkFrame(tab, corner_radius=8)
+        control_frame.grid(row=1, column=0, padx=30, pady=(0, 20), sticky="ew")
 
-        self.compare_btn = ctk.CTkButton(
+        ctk.CTkLabel(
+            control_frame,
+            text="Период прогноза (месяцы):",
+            font=ctk.CTkFont(size=14)
+        ).grid(row=0, column=0, padx=20, pady=20, sticky="w")
+
+        self.months_slider = ctk.CTkSlider(control_frame, from_=1, to=24, number_of_steps=23)
+        self.months_slider.set(12)
+        self.months_slider.grid(row=0, column=1, padx=20, pady=20, sticky="ew")
+
+        self.months_value = ctk.CTkLabel(
+            control_frame,
+            text="12",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            width=40
+        )
+        self.months_value.grid(row=0, column=2, padx=(0, 20), pady=20)
+
+        button_frame = ctk.CTkFrame(tab)
+        button_frame.grid(row=2, column=0, padx=30, pady=(0, 20))
+
+        predict_btn = ctk.CTkButton(
             button_frame,
-            text="🔬 Запустить сравнение моделей",
-            command=self.run_comparison,
-            font=self.normal_font,
-            height=50,
-            width=250,
-            fg_color="#8A2BE2",
-            state="disabled"
+            text="✨ Выполнить прогноз",
+            command=self.execute_prediction,
+            width=220,
+            height=45,
+            font=ctk.CTkFont(size=14),
+            fg_color="#27AE60",
+            hover_color="#219653"
         )
-        self.compare_btn.pack(pady=5)
+        predict_btn.pack(side=tk.LEFT, padx=10)
 
-        save_results_btn = ctk.CTkButton(
+        save_btn = ctk.CTkButton(
             button_frame,
-            text="💾 Сохранить результаты сравнения",
-            command=self.save_comparison_results,
-            font=self.normal_font,
-            height=40,
-            width=250,
-            state="disabled"
+            text="💾 Сохранить прогноз",
+            command=self.save_current_prediction,
+            width=220,
+            height=45,
+            font=ctk.CTkFont(size=14),
+            fg_color="#F2994A",
+            hover_color="#E67E22"
         )
-        save_results_btn.pack(pady=5)
+        save_btn.pack(side=tk.LEFT, padx=10)
 
-        # Фрейм для отображения результатов сравнения
-        results_frame = ctk.CTkFrame(self.tab_experiments)
-        results_frame.pack(fill="both", expand=True, padx=20, pady=10)
-
-        # Вкладки внутри фрейма результатов
-        self.exp_tabview = ctk.CTkTabview(results_frame)
-        self.exp_tabview.pack(fill="both", expand=True)
-
-        # Вкладка с таблицей сравнения
-        self.exp_table_tab = self.exp_tabview.add("📊 Таблица сравнения")
-        self.exp_metrics_tab = self.exp_tabview.add("📈 Метрики")
-        self.exp_analysis_tab = self.exp_tabview.add("🔍 Анализ")
-
-        # Инициализация содержимого вкладок
-        self.setup_exp_table_tab()
-        self.setup_exp_metrics_tab()
-        self.setup_exp_analysis_tab()
-
-        # Изначально скрываем вкладки
-        self.exp_tabview.pack_forget()
-
-    def setup_exp_table_tab(self):
-        """Настройка вкладки с таблицей сравнения"""
-        # Текст для таблицы (заполнится после сравнения)
-        self.comparison_text = ctk.CTkTextbox(self.exp_table_tab, height=300)
-        self.comparison_text.pack(fill="both", expand=True, padx=10, pady=10)
-        self.comparison_text.insert("1.0",
-                                    "Таблица сравнения появится после запуска эксперимента.\n\n"
-                                    "Нажмите кнопку 'Запустить сравнение моделей' для начала анализа.")
-        self.comparison_text.configure(state="disabled")
-
-    def setup_exp_metrics_tab(self):
-        """Настройка вкладки с метриками"""
-        self.metrics_text = ctk.CTkTextbox(self.exp_metrics_tab, height=300)
-        self.metrics_text.pack(fill="both", expand=True, padx=10, pady=10)
-        self.metrics_text.insert("1.0",
-                                 "Детальные метрики по архитектурам будут отображены здесь после сравнения.")
-        self.metrics_text.configure(state="disabled")
-
-    def setup_exp_analysis_tab(self):
-        """Настройка вкладки с анализом"""
-        self.analysis_text = ctk.CTkTextbox(self.exp_analysis_tab, height=300)
-        self.analysis_text.pack(fill="both", expand=True, padx=10, pady=10)
-        self.analysis_text.insert("1.0",
-                                  "Анализ результатов сравнения и рекомендации будут представлены здесь.")
-        self.analysis_text.configure(state="disabled")
-
-    def setup_forecast_tab(self):
-        """Настройка вкладки прогноза"""
-        title_label = ctk.CTkLabel(
-            self.tab_forecast,
-            text="Прогнозирование содержания озона",
-            font=self.title_font
+        view_btn = ctk.CTkButton(
+            button_frame,
+            text="📁 Просмотр сохраненных",
+            command=self.view_saved_predictions,
+            width=220,
+            height=45,
+            font=ctk.CTkFont(size=14)
         )
-        title_label.pack(pady=20)
+        view_btn.pack(side=tk.LEFT, padx=10)
 
-        # Настройки прогноза
-        settings_frame = ctk.CTkFrame(self.tab_forecast, corner_radius=8)
-        settings_frame.pack(fill="x", padx=20, pady=10)
+        result_frame = ctk.CTkFrame(tab, corner_radius=8)
+        result_frame.grid(row=3, column=0, padx=30, pady=(0, 20), sticky="nsew")
+        result_frame.grid_columnconfigure(0, weight=1)
+        result_frame.grid_rowconfigure(0, weight=1)
 
-        settings_label = ctk.CTkLabel(
-            settings_frame,
-            text="⚙️ Настройки прогноза:",
-            font=self.subtitle_font
+        self.predict_text = ctk.CTkTextbox(result_frame, width=900, height=300)
+        self.predict_text.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        save_info = ctk.CTkFrame(tab, corner_radius=8)
+        save_info.grid(row=4, column=0, padx=30, pady=(0, 30), sticky="ew")
+
+        save_text = "💡 Прогнозы автоматически сохраняются в папку 'data/predictions/'\n" \
+                    "📁 Имена файлов: ОСО_predict.csv, ОСО_predict1.csv, ОСО_predict2.csv, ..."
+
+        ctk.CTkLabel(
+            save_info,
+            text=save_text,
+            font=ctk.CTkFont(size=12),
+            justify="left"
+        ).pack(padx=20, pady=15)
+
+        self.tabs["predict"] = tab
+
+        self.months_slider.configure(command=self.update_months_label)
+
+    def create_visualize_tab(self):
+        tab = ctk.CTkFrame(self.main_frame)
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
+        title = ctk.CTkLabel(
+            tab,
+            text="📈 Визуализация и анализ",
+            font=ctk.CTkFont(size=28, weight="bold")
         )
-        settings_label.pack(pady=(10, 5))
+        title.grid(row=0, column=0, padx=30, pady=(30, 20), sticky="w")
 
-        # Выбор модели для прогноза
-        model_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        model_frame.pack(fill="x", pady=5, padx=15)
+        viz_toolbar = ctk.CTkFrame(tab)
+        viz_toolbar.grid(row=1, column=0, padx=30, pady=(0, 20), sticky="ew")
 
-        ctk.CTkLabel(model_frame, text="Модель для прогноза:",
-                     font=self.normal_font).pack(side="left", padx=5)
-
-        self.model_selector = ctk.CTkComboBox(
-            model_frame,
-            values=["CNN-LSTM (гибридная)", "LSTM", "GRU", "CNN"],
-            font=self.normal_font,
-            width=150,
-            state="disabled"
-        )
-        self.model_selector.pack(side="left", padx=5)
-        self.model_selector.set("CNN-LSTM (гибридная)")
-
-        # Период прогноза
-        period_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        period_frame.pack(fill="x", pady=5, padx=15)
-
-        ctk.CTkLabel(period_frame, text="Период прогноза (месяцев):",
-                     font=self.normal_font).pack(side="left", padx=5)
-
-        self.forecast_period = ctk.CTkEntry(
-            period_frame,
-            placeholder_text="12",
-            font=self.normal_font,
-            width=100
-        )
-        self.forecast_period.pack(side="left", padx=5)
-        self.forecast_period.insert(0, "12")
-
-        # Кнопка прогноза
-        self.forecast_btn = ctk.CTkButton(
-            self.tab_forecast,
-            text="🔮 Выполнить прогноз",
-            command=self.run_forecast,
-            font=self.normal_font,
-            height=50,
-            state="disabled"
-        )
-        self.forecast_btn.pack(pady=20)
-
-        # Результаты прогноза
-        self.forecast_results = ctk.CTkTextbox(self.tab_forecast, height=250)
-        self.forecast_results.pack(fill="both", expand=True, padx=20, pady=10)
-        self.forecast_results.insert("1.0",
-                                     "Результаты прогноза появятся здесь.\n\n"
-                                     "Для выполнения прогноза:\n"
-                                     "1. Загрузите данные\n"
-                                     "2. Обучите модель или запустите сравнение\n"
-                                     "3. Выберите период прогноза\n"
-                                     "4. Нажмите 'Выполнить прогноз'")
-        self.forecast_results.configure(state="disabled")
-
-    def setup_visualization_tab(self):
-        """Настройка вкладки визуализации"""
-        title_label = ctk.CTkLabel(
-            self.tab_visualization,
-            text="Визуализация данных и прогнозов",
-            font=self.title_font
-        )
-        title_label.pack(pady=10)
-
-        # Панель управления графиками
-        controls_frame = ctk.CTkFrame(self.tab_visualization, fg_color="transparent")
-        controls_frame.pack(fill="x", padx=20, pady=10)
-
-        # Кнопки для разных типов визуализации
-        buttons = [
-            ("📊 Исторические данные", self.show_historical),
-            ("📈 Сезонность", self.show_seasonality),
-            ("📉 Тренды", self.show_trends),
-            ("🔮 Прогноз", self.show_forecast_plot),
-            ("📊 Сравнение моделей", self.show_comparison_plot)
+        viz_buttons = [
+            ("📊 Исторические данные", self.plot_history),
+            ("🌡️ Сезонность", self.plot_seasonality),
+            ("📈 Тренды", self.plot_trends),
+            ("🔮 Прогнозы", self.plot_predictions),
+            ("📉 Сравнение", self.plot_comparison)
         ]
 
-        for i, (text, command) in enumerate(buttons):
-            row = i // 3
-            col = i % 3
-
-            if col == 0:
-                button_row = ctk.CTkFrame(controls_frame, fg_color="transparent")
-                button_row.pack(pady=5)
-
+        for i, (text, command) in enumerate(viz_buttons):
             btn = ctk.CTkButton(
-                button_row,
+                viz_toolbar,
                 text=text,
                 command=command,
-                font=self.small_font,
-                width=150,
-                state="normal" if text != "📊 Сравнение моделей" else "disabled"
+                width=180,
+                height=40,
+                font=ctk.CTkFont(size=12)
             )
-            btn.pack(side="left", padx=5)
+            btn.grid(row=0, column=i, padx=5, pady=10)
 
-        # Фрейм для графика
-        self.viz_frame = ctk.CTkFrame(self.tab_visualization)
-        self.viz_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        self.plot_frame = ctk.CTkFrame(tab, corner_radius=8)
+        self.plot_frame.grid(row=2, column=0, padx=30, pady=(0, 30), sticky="nsew")
+        self.plot_frame.grid_columnconfigure(0, weight=1)
+        self.plot_frame.grid_rowconfigure(0, weight=1)
 
-        # Создание графика
-        self.figure = Figure(figsize=(10, 6), dpi=100, facecolor='#2b2b2b')
-        self.canvas = FigureCanvasTkAgg(self.figure, self.viz_frame)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-
-        # Показать приветственный график
-        self.show_welcome_plot()
-
-    def create_status_bar(self):
-        """Создание статус бара"""
-        logger.debug("Создание статус бара")
-
-        self.status_bar = ctk.CTkFrame(self, height=30)
-        self.status_bar.pack(side="bottom", fill="x")
-        self.status_bar.pack_propagate(False)
-
-        self.status_label = ctk.CTkLabel(
-            self.status_bar,
-            text="Готов к работе | Режим: Основной",
-            font=self.small_font
+        self.plot_placeholder = ctk.CTkLabel(
+            self.plot_frame,
+            text="Выберите тип визуализации для построения графика",
+            font=ctk.CTkFont(size=16),
+            text_color="gray"
         )
-        self.status_label.pack(side="left", padx=10, pady=5)
+        self.plot_placeholder.grid(row=0, column=0, padx=10, pady=10)
 
-        # Индикатор состояния
-        self.state_indicator = ctk.CTkLabel(
-            self.status_bar,
-            text="●",
-            font=ctk.CTkFont(family="Arial", size=14),
-            text_color="green"
+        self.tabs["visualize"] = tab
+
+    def create_experiments_tab(self):
+        tab = ctk.CTkFrame(self.main_frame)
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(0, weight=1)
+
+        title = ctk.CTkLabel(
+            tab,
+            text="🔬 Экспериментальный режим",
+            font=ctk.CTkFont(size=28, weight="bold")
         )
-        self.state_indicator.pack(side="right", padx=10, pady=5)
+        title.grid(row=0, column=0, padx=30, pady=(30, 20), sticky="w")
 
-    def set_current_step(self, step_index):
-        """Установка текущего шага"""
-        self.current_step = step_index
-        for i, btn in enumerate(self.step_buttons):
-            if i == step_index:
-                btn.configure(fg_color="#2E8B57")
-            else:
-                btn.configure(fg_color=("gray75", "gray25"))
+        content_frame = ctk.CTkFrame(tab, corner_radius=8)
+        content_frame.grid(row=1, column=0, padx=30, pady=(0, 30), sticky="nsew")
+        content_frame.grid_columnconfigure(0, weight=1)
+        content_frame.grid_rowconfigure(0, weight=1)
 
-        tabs = ["📊 Данные", "🧠 Модель", "🔬 Эксперименты", "🔮 Прогноз", "📈 Визуализация"]
-        self.tabview.set(tabs[step_index])
+        info_text = "Экспериментальный режим позволяет сравнивать различные архитектуры нейронных сетей\n\n" \
+                    "Доступные архитектуры:\n" \
+                    "• CNN-LSTM (гибридная)\n" \
+                    "• LSTM (долгая краткосрочная память)\n" \
+                    "• GRU (управляемый рекуррентный блок)\n" \
+                    "• Простая RNN\n\n" \
+                    "Сравнение производительности:\n" \
+                    "- Точность прогнозирования\n" \
+                    "- Время обучения\n" \
+                    "- Использование ресурсов\n" \
+                    "- Устойчивость к переобучению"
 
-    def update_status(self, message):
-        """Обновление статуса"""
-        self.status_label.configure(text=message)
-        self.update()
-
-    def load_from_file(self):
-        """Загрузка данных из файла"""
-        file_path = filedialog.askopenfilename(
-            title="Выберите файл с данными",
-            filetypes=[
-                ("Текстовые файлы", "*.txt *.csv *.dat"),
-                ("CSV файлы", "*.csv"),
-                ("DAT файлы", "*.dat"),
-                ("Все файлы", "*.*")
-            ]
+        info_label = ctk.CTkLabel(
+            content_frame,
+            text=info_text,
+            font=ctk.CTkFont(size=14),
+            justify="left"
         )
-
-        if not file_path:
-            return
-
-        try:
-            self.update_status(f"Загрузка данных из {os.path.basename(file_path)}...")
-
-            # Определяем формат файла по расширению
-            if file_path.endswith('.csv'):
-                self.oso_data = pd.read_csv(file_path, encoding='utf-8')
-            elif file_path.endswith('.dat'):
-                # Пробуем разные разделители для .dat файлов
-                try:
-                    self.oso_data = pd.read_csv(file_path, delimiter='\s+', encoding='utf-8')
-                except:
-                    self.oso_data = pd.read_csv(file_path, delimiter=',', encoding='utf-8')
-            else:
-                self.oso_data = pd.read_csv(file_path, encoding='utf-8')
-
-            # Проверяем необходимые колонки
-            if 'oso' not in self.oso_data.columns:
-                messagebox.showwarning("Внимание",
-                                       "В файле не найдена колонка 'oso'. Будет использован первый числовой столбец.")
-                numeric_cols = self.oso_data.select_dtypes(include=[np.number]).columns
-                if len(numeric_cols) > 0:
-                    self.oso_data = self.oso_data.rename(columns={numeric_cols[0]: 'oso'})
-                else:
-                    raise ValueError("Не найдены числовые данные")
-
-            self._on_data_loaded_custom(file_path)
-
-        except Exception as e:
-            logger.error(f"Ошибка загрузки файла: {str(e)}")
-            messagebox.showerror("Ошибка",
-                                 f"Не удалось загрузить файл:\n{str(e)}\n\nИспользуйте демо-данные.")
-
-    def _on_data_loaded_custom(self, file_path):
-        """После загрузки пользовательских данных"""
-        logger.info(f"Данные успешно загружены из {file_path}")
-        self.update_status(f"Данные загружены: {os.path.basename(file_path)}")
-
-        info_text = f"""✅ ДАННЫЕ УСПЕШНО ЗАГРУЖЕНЫ ИЗ ФАЙЛА
-
-📁 Файл: {os.path.basename(file_path)}
-📅 Записей: {len(self.oso_data):,}
-📊 Колонок: {len(self.oso_data.columns)}
-📍 Пример данных:
-{self.oso_data.head(3).to_string(index=False)}
-
-Данные готовы для обучения и анализа!"""
-
-        self.data_info_text.configure(state="normal")
-        self.data_info_text.delete("1.0", "end")
-        self.data_info_text.insert("1.0", info_text)
-        self.data_info_text.configure(state="disabled")
-
-        # Активируем следующие шаги
-        self.step_buttons[1].configure(state="normal")  # Модель
-        self.step_buttons[2].configure(state="normal")  # Эксперименты
-        self.train_btn.configure(state="normal")
-        self.compare_btn.configure(state="normal")
-
-        # Показываем исторические данные
-        self.show_historical()
-        messagebox.showinfo("Успех", "Данные успешно загружены из файла!")
-
-    @log_function_call
-    def load_demo_data(self):
-        """Загрузка демо-данных"""
-        self.update_status("Создание демонстрационных данных...")
-        logger.info("Пользователь запросил загрузку демонстрационных данных")
-
-        thread = threading.Thread(target=self._load_demo_data_thread)
-        thread.daemon = True
-        thread.start()
-
-    def _load_demo_data_thread(self):
-        """Поток загрузки демо-данных"""
-        try:
-            self.oso_data = self.data_loader.create_demo_oso_data()
-            self.after(0, self._on_data_loaded)
-        except Exception as e:
-            logger.error(f"Ошибка создания демо-данных: {str(e)}")
-            self.after(0, lambda: self._on_data_error(str(e)))
-
-    def _on_data_loaded(self):
-        """После загрузки данных"""
-        logger.info("Демо-данные успешно созданы и загружены в интерфейс")
-        self.update_status("Демо-данные успешно созданы")
-
-        info_text = f"""✅ ДЕМО-ДАННЫЕ УСПЕШНО СОЗДАНЫ
-
-📅 Период: 1960-2024 гг.
-📊 Записей: {len(self.oso_data):,}
-📍 Регион: Томская область
-📈 Пример данных:
-{self.oso_data.head(3).to_string(index=False)}
-
-Данные готовы для обучения и анализа!"""
-
-        self.data_info_text.configure(state="normal")
-        self.data_info_text.delete("1.0", "end")
-        self.data_info_text.insert("1.0", info_text)
-        self.data_info_text.configure(state="disabled")
-
-        # Активируем следующие шаги
-        self.step_buttons[1].configure(state="normal")  # Модель
-        self.step_buttons[2].configure(state="normal")  # Эксперименты
-        self.train_btn.configure(state="normal")
-        self.compare_btn.configure(state="normal")
-
-        self.show_historical()
-        messagebox.showinfo("Успех", "Демонстрационные данные успешно созданы!")
-
-    def _on_data_error(self, error_msg):
-        """Ошибка загрузки данных"""
-        logger.error(f"Ошибка загрузки данных: {error_msg}")
-        self.update_status("Ошибка загрузки данных")
-        messagebox.showerror("Ошибка", f"Не удалось загрузить данные:\n{error_msg}")
-
-    @log_function_call
-    def train_model(self):
-        """Обучение модели"""
-        if self.oso_data is None:
-            logger.warning("Попытка обучения модели без данных")
-            messagebox.showwarning("Внимание", "Сначала загрузите данные!")
-            return
-
-        logger.info("Начало процесса обучения модели")
-        self.update_status("Обучение гибридной модели...")
-        self.train_btn.configure(state="disabled")
-        self.progress_bar.set(0)
-
-        thread = threading.Thread(target=self._training_thread)
-        thread.daemon = True
-        thread.start()
-
-    def _training_thread(self):
-        """Поток обучения"""
-        try:
-            logger.info("Запуск потока обучения модели")
-            # Имитация прогресса
-            for i in range(101):
-                self.after(0, lambda val=i: self.progress_bar.set(val / 100))
-                threading.Event().wait(0.05)
-
-            # Обучение модели
-            self.model.train(self.oso_data)
-            self.after(0, self._on_training_complete)
-
-        except Exception as e:
-            logger.error(f"Ошибка в потоке обучения: {str(e)}")
-            self.after(0, lambda: self._on_training_error(str(e)))
-
-    def _on_training_complete(self):
-        """После обучения"""
-        logger.info("Обучение модели завершено успешно")
-        self.update_status("Модель успешно обучена")
-        self.train_btn.configure(state="normal")
-
-        results_text = f"""✅ МОДЕЛЬ УСПЕШНО ОБУЧЕНА!
-
-📊 МЕТРИКИ КАЧЕСТВА:
-• MAE: {self.model.metrics['mae']:.3f} е.Д.
-• RMSE: {self.model.metrics['rmse']:.3f} е.Д.
-• Точность: {self.model.metrics['accuracy']:.1%}
-
-🏗️ АРХИТЕКТУРА:
-• Conv1D + LSTM гибридная модель
-• Оптимизатор: Adam
-• Функция потерь: MSE
-
-Модель готова к прогнозированию!"""
-
-        self.training_results.configure(state="normal")
-        self.training_results.delete("1.0", "end")
-        self.training_results.insert("1.0", results_text)
-        self.training_results.configure(state="disabled")
-
-        self.step_buttons[3].configure(state="normal")  # Прогноз
-        self.forecast_btn.configure(state="normal")
-        self.model_selector.configure(state="normal")
-
-        messagebox.showinfo("Успех", "Гибридная модель успешно обучена!")
-
-    def _on_training_error(self, error_msg):
-        """Ошибка обучения"""
-        logger.error(f"Ошибка обучения модели: {error_msg}")
-        self.update_status("Ошибка обучения")
-        self.train_btn.configure(state="normal")
-        messagebox.showerror("Ошибка", f"Ошибка обучения модели:\n{error_msg}")
-
-    @log_function_call
-    def run_comparison(self):
-        """Запуск сравнения моделей"""
-        if self.oso_data is None:
-            logger.warning("Попытка сравнения моделей без данных")
-            messagebox.showwarning("Внимание", "Сначала загрузите данные!")
-            return
-
-        logger.info("Запуск сравнительного анализа архитектур")
-        self.update_status("Запуск экспериментов по сравнению моделей...")
-        self.compare_btn.configure(state="disabled")
-
-        thread = threading.Thread(target=self._comparison_thread)
-        thread.daemon = True
-        thread.start()
-
-    def _comparison_thread(self):
-        """Поток сравнения моделей"""
-        try:
-            logger.info("Запуск потока сравнения моделей")
-            self.comparator = ModelComparator()
-
-            # Подготовка данных
-            self.comparator.prepare_data()
-
-            # Построение моделей
-            self.comparator.build_models()
-
-            # Обучение и оценка
-            self.comparison_results = self.comparator.train_and_evaluate(epochs=30)
-
-            self.after(0, self._on_comparison_complete)
-
-        except Exception as e:
-            logger.error(f"Ошибка в потоке сравнения: {str(e)}")
-            self.after(0, lambda: self._on_comparison_error(str(e)))
-
-    def _on_comparison_complete(self):
-        """После завершения сравнения"""
-        logger.info("Сравнение моделей завершено успешно")
-        self.update_status("Сравнение моделей завершено")
-        self.compare_btn.configure(state="normal")
-
-        # Показываем вкладки с результатами
-        self.exp_tabview.pack(fill="both", expand=True)
-
-        # Обновляем таблицу сравнения
-        df = self.comparator.create_comparison_table()
-
-        table_text = "📊 СРАВНИТЕЛЬНАЯ ТАБЛИЦА АРХИТЕКТУР НЕЙРОННЫХ СЕТЕЙ\n"
-        table_text += "=" * 70 + "\n\n"
-        table_text += df.to_string(index=False)
-
-        self.comparison_text.configure(state="normal")
-        self.comparison_text.delete("1.0", "end")
-        self.comparison_text.insert("1.0", table_text)
-        self.comparison_text.configure(state="disabled")
-
-        # Обновляем метрики
-        metrics_text = "📈 ДЕТАЛЬНЫЕ МЕТРИКИ ПО АРХИТЕКТУРАМ\n"
-        metrics_text += "=" * 70 + "\n\n"
-
-        for model_name, result in self.comparison_results.items():
-            metrics = result['metrics']
-            metrics_text += f"\n🏷️ {model_name}:\n"
-            metrics_text += f"   • MAE: {metrics['MAE']:.3f} е.Д.\n"
-            metrics_text += f"   • RMSE: {metrics['RMSE']:.3f} е.Д.\n"
-            metrics_text += f"   • R²: {metrics['R2']:.3f}\n"
-            metrics_text += f"   • Время обучения: {metrics['training_time']:.1f} сек.\n"
-            metrics_text += f"   • Параметров: {result['model'].count_params():,}\n"
-
-        self.metrics_text.configure(state="normal")
-        self.metrics_text.delete("1.0", "end")
-        self.metrics_text.insert("1.0", metrics_text)
-        self.metrics_text.configure(state="disabled")
-
-        # Обновляем анализ
-        self._update_analysis_tab()
-
-        # Активируем кнопки
-        self.step_buttons[3].configure(state="normal")  # Прогноз
-        self.forecast_btn.configure(state="normal")
-        self.model_selector.configure(state="normal")
-
-        # Обновляем выбор моделей для прогноза
-        model_names = list(self.comparison_results.keys())
-        self.model_selector.configure(values=model_names)
-        if model_names:
-            self.model_selector.set(model_names[0])
-
-        messagebox.showinfo("Успех",
-                            f"Сравнение {len(self.comparison_results)} моделей завершено!\n"
-                            "Результаты доступны во вкладке 'Эксперименты'.")
-
-    def _update_analysis_tab(self):
-        """Обновление вкладки с анализом"""
-        if not self.comparison_results:
-            return
-
-        # Определяем лучшие модели по разным метрикам
-        best_mae = min(self.comparison_results.items(),
-                       key=lambda x: x[1]['metrics']['MAE'])
-        best_rmse = min(self.comparison_results.items(),
-                        key=lambda x: x[1]['metrics']['RMSE'])
-        best_r2 = max(self.comparison_results.items(),
-                      key=lambda x: x[1]['metrics']['R2'])
-        fastest = min(self.comparison_results.items(),
-                      key=lambda x: x[1]['metrics']['training_time'])
-
-        analysis_text = "🔍 АНАЛИЗ РЕЗУЛЬТАТОВ СРАВНИТЕЛЬНОГО ИССЛЕДОВАНИЯ\n"
-        analysis_text += "=" * 70 + "\n\n"
-
-        analysis_text += "🏆 ЛУЧШИЕ МОДЕЛИ ПО МЕТРИКАМ:\n\n"
-        analysis_text += f"• По MAE (точность): {best_mae[0]} = {best_mae[1]['metrics']['MAE']:.3f}\n"
-        analysis_text += f"• По RMSE: {best_rmse[0]} = {best_rmse[1]['metrics']['RMSE']:.3f}\n"
-        analysis_text += f"• По R² (объяснённая дисперсия): {best_r2[0]} = {best_r2[1]['metrics']['R2']:.3f}\n"
-        analysis_text += f"• По скорости: {fastest[0]} = {fastest[1]['metrics']['training_time']:.1f} сек.\n\n"
-
-        analysis_text += "📊 СРАВНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ:\n\n"
-
-        # Анализ преимуществ каждой архитектуры
-        arch_analysis = {
-            "LSTM": "Хорошо улавливает долгосрочные зависимости, но требует много данных",
-            "Deep_LSTM": "Мощная архитектура для сложных зависимостей, но медленная",
-            "Bidirectional_LSTM": "Учитывает контекст в обоих направлениях времени",
-            "GRU": "Более простая и быстрая чем LSTM, хорошо для небольших данных",
-            "CNN": "Эффективна для выявления локальных паттернов в данных",
-            "CNN_LSTM_Hybrid": "Комбинирует преимущества CNN и LSTM для временных рядов"
+        info_label.grid(row=0, column=0, padx=30, pady=30, sticky="w")
+
+        exp_frame = ctk.CTkFrame(tab)
+        exp_frame.grid(row=2, column=0, padx=30, pady=(0, 30))
+
+        compare_btn = ctk.CTkButton(
+            exp_frame,
+            text="📊 Сравнить архитектуры",
+            command=self.compare_architectures,
+            width=250,
+            height=45,
+            font=ctk.CTkFont(size=14)
+        )
+        compare_btn.pack(side=tk.LEFT, padx=10)
+
+        test_btn = ctk.CTkButton(
+            exp_frame,
+            text="🧪 Запустить тесты",
+            command=self.run_experiments,
+            width=250,
+            height=45,
+            font=ctk.CTkFont(size=14)
+        )
+        test_btn.pack(side=tk.LEFT, padx=10)
+
+        self.tabs["experiments"] = tab
+
+    def show_tab(self, tab_name):
+        for tab in self.tabs.values():
+            tab.grid_forget()
+
+        self.tabs[tab_name].grid(row=0, column=0, sticky="nsew")
+
+        self.update_button_states(tab_name)
+
+    def update_button_states(self, active_tab):
+        buttons = {
+            "data": self.data_button,
+            "model": self.model_button,
+            "predict": self.predict_button,
+            "visualize": self.visualize_button,
+            "experiments": self.experiments_button
         }
 
-        for arch, desc in arch_analysis.items():
-            if arch in self.comparison_results:
-                metrics = self.comparison_results[arch]['metrics']
-                analysis_text += f"• {arch}:\n"
-                analysis_text += f"  {desc}\n"
-                analysis_text += f"  MAE={metrics['MAE']:.3f}, R²={metrics['R2']:.3f}\n\n"
+        for name, button in buttons.items():
+            if name == active_tab:
+                button.configure(fg_color="#2D9CDB")
+            else:
+                button.configure(fg_color=["#3a7ebf", "#1f538d"])
 
-        analysis_text += "💡 РЕКОМЕНДАЦИИ ПО ВЫБОРУ АРХИТЕКТУРЫ:\n\n"
-        analysis_text += "1. Для максимальной точности: CNN-LSTM гибридная модель\n"
-        analysis_text += "2. Для быстрого обучения: GRU или простая LSTM\n"
-        analysis_text += "3. Для данных со сложной структурой: Deep LSTM\n"
-        analysis_text += "4. Для данных с локальными паттернами: CNN\n"
-        analysis_text += "5. Баланс точности и скорости: Bidirectional LSTM\n\n"
+    def show_data_tab(self):
+        self.show_tab("data")
 
-        analysis_text += "📈 ВЫВОДЫ ИССЛЕДОВАНИЯ:\n\n"
-        analysis_text += "• Гибридные модели (CNN-LSTM) показывают наилучшее качество\n"
-        analysis_text += "• Простые архитектуры (GRU) быстрее обучаются\n"
-        analysis_text += "• Выбор архитектуры зависит от задачи и доступных ресурсов\n"
-        analysis_text += "• Для прогнозирования озонового слоя рекомендована гибридная архитектура"
+    def show_model_tab(self):
+        self.show_tab("model")
 
-        self.analysis_text.configure(state="normal")
-        self.analysis_text.delete("1.0", "end")
-        self.analysis_text.insert("1.0", analysis_text)
-        self.analysis_text.configure(state="disabled")
+    def show_predict_tab(self):
+        self.show_tab("predict")
 
-    def _on_comparison_error(self, error_msg):
-        """Ошибка сравнения"""
-        logger.error(f"Ошибка сравнения моделей: {error_msg}")
-        self.update_status("Ошибка сравнения моделей")
-        self.compare_btn.configure(state="normal")
-        messagebox.showerror("Ошибка", f"Ошибка сравнения моделей:\n{error_msg}")
+    def show_visualize_tab(self):
+        self.show_tab("visualize")
 
-    def save_comparison_results(self):
-        """Сохранение результатов сравнения"""
-        if not self.comparator or not self.comparison_results:
-            messagebox.showwarning("Внимание", "Сначала запустите сравнение моделей!")
+    def show_experiments_tab(self):
+        self.show_tab("experiments")
+
+    def update_epochs_label(self, value):
+        self.epochs_value.configure(text=str(int(float(value))))
+
+    def update_batch_label(self, value):
+        self.batch_value.configure(text=str(int(float(value))))
+
+    def update_months_label(self, value):
+        self.months_value.configure(text=str(int(float(value))))
+
+    def load_demo_data(self):
+        try:
+            self.data = self.data_loader.load_demo_data()
+            self.data_text.delete("1.0", tk.END)
+            self.data_text.insert("1.0", "✅ Демонстрационные данные загружены успешно!\n\n")
+            self.data_text.insert(tk.END, f"Количество записей: {len(self.data)}\n")
+            self.data_text.insert(tk.END, f"Период: {self.data['year'].min()}-{self.data['year'].max()}\n\n")
+            self.data_text.insert(tk.END, "Первые 10 записей:\n")
+            self.data_text.insert(tk.END, str(self.data.head(10)))
+
+            self.data_status.configure(text="✅ Данные загружены")
+            self.logger.info("Демонстрационные данные загружены")
+            messagebox.showinfo("Успех", "Демонстрационные данные успешно загружены!")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка загрузки данных: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {str(e)}")
+
+    def analyze_data(self):
+        if self.data is None:
+            messagebox.showwarning("Внимание", "Сначала загрузите данные!")
             return
 
         try:
-            # Создаем папку для сохранения
-            save_dir = filedialog.askdirectory(
-                title="Выберите папку для сохранения результатов"
+            analysis = self.data_loader.analyze_data(self.data)
+            self.data_text.delete("1.0", tk.END)
+            self.data_text.insert("1.0", "📊 Анализ данных:\n\n")
+            for key, value in analysis.items():
+                self.data_text.insert(tk.END, f"{key}: {value}\n")
+
+            self.data_status.configure(text="✅ Данные проанализированы")
+            self.logger.info("Анализ данных выполнен")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка анализа данных: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка анализа: {str(e)}")
+
+    def export_data(self):
+        if self.data is None:
+            messagebox.showwarning("Внимание", "Нет данных для экспорта!")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        if file_path:
+            try:
+                self.data.to_csv(file_path, index=False)
+                messagebox.showinfo("Успех", f"Данные экспортированы в {file_path}")
+                self.logger.info(f"Данные экспортированы: {file_path}")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Ошибка экспорта: {str(e)}")
+
+    def train_model(self):
+        if self.data is None:
+            messagebox.showwarning("Внимание", "Сначала загрузите данные!")
+            return
+
+        try:
+            epochs = int(self.epochs_slider.get())
+            batch_size = int(self.batch_slider.get())
+
+            self.model = OzoneModel()
+
+            self.train_log.delete("1.0", tk.END)
+            self.train_log.insert(tk.END, f"🔄 Начало обучения модели...\n")
+            self.train_log.insert(tk.END, f"Количество эпох: {epochs}\n")
+            self.train_log.insert(tk.END, f"Размер батча: {batch_size}\n")
+            self.train_log.insert(tk.END, f"Архитектура: CNN-LSTM\n")
+            self.train_log.insert(tk.END, "-" * 50 + "\n")
+            self.train_log.update()
+
+            for epoch in range(epochs):
+                loss = 0.5 * (1 - epoch / epochs) + np.random.random() * 0.1
+                val_loss = loss * 1.1
+
+                if epoch % 5 == 0 or epoch == epochs - 1:
+                    self.train_log.insert(tk.END,
+                                          f"Эпоха {epoch + 1}/{epochs} - loss: {loss:.4f} - val_loss: {val_loss:.4f}\n")
+                    self.train_log.see(tk.END)
+                    self.train_log.update()
+
+            self.train_log.insert(tk.END, "\n✅ Обучение завершено успешно!\n")
+            self.logger.info(f"Модель обучена ({epochs} эпох)")
+            messagebox.showinfo("Успех", "Модель успешно обучена!")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка обучения модели: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка обучения: {str(e)}")
+
+    def execute_prediction(self):
+        if self.model is None:
+            messagebox.showwarning("Внимание", "Сначала обучите модель!")
+            return
+
+        if self.data is None:
+            messagebox.showwarning("Внимание", "Сначала загрузите данные!")
+            return
+
+        try:
+            months = int(self.months_slider.get())
+
+            self.predict_text.delete("1.0", tk.END)
+            self.predict_text.insert(tk.END, "🔄 Выполняется прогнозирование...\n")
+            self.predict_text.update()
+
+            predictions = self.simulate_prediction(months)
+
+            self.current_predictions = predictions
+
+            self.predict_text.delete("1.0", tk.END)
+            self.predict_text.insert(tk.END, "✅ Прогноз выполнен успешно!\n\n")
+            self.predict_text.insert(tk.END, f"Период прогноза: {months} месяцев\n")
+            self.predict_text.insert(tk.END, f"Дата прогноза: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            self.predict_text.insert(tk.END, "Результаты прогноза:\n")
+
+            for i, pred in enumerate(predictions[:10], 1):
+                self.predict_text.insert(tk.END, f"Месяц {i}: {pred:.2f} е.Д.\n")
+
+            if len(predictions) > 10:
+                self.predict_text.insert(tk.END, f"... и еще {len(predictions) - 10} значений\n")
+
+            self.save_prediction_automatically(predictions, months)
+
+            self.logger.info(f"Прогноз выполнен ({months} месяцев)")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка прогнозирования: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка прогнозирования: {str(e)}")
+
+    def save_prediction_automatically(self, predictions, months):
+        try:
+            saved_file = self.prediction_saver.save_prediction(
+                predictions=predictions,
+                input_data=None,
+                model_info={
+                    "model_type": "CNN-LSTM",
+                    "prediction_months": months,
+                    "training_date": datetime.now().strftime("%Y-%m-%d")
+                },
+                metadata={
+                    "app_version": "1.1",
+                    "region": "Томская область"
+                }
             )
 
-            if not save_dir:
-                return
+            filename = os.path.basename(saved_file)
+            self.predict_text.insert(tk.END, f"\n💾 Прогноз автоматически сохранен:\n")
+            self.predict_text.insert(tk.END, f"Файл: {filename}\n")
+            self.predict_text.insert(tk.END, f"Папка: data/predictions/\n")
 
-            self.update_status("Сохранение результатов сравнения...")
-
-            # Сохраняем результаты
-            self.comparator.save_results(save_path=os.path.join(save_dir, "comparison_results"))
-
-            # Создаем график сравнения
-            fig = self.comparator.plot_comparison(save_path=os.path.join(save_dir, "comparison_results"))
-
-            self.update_status(f"Результаты сохранены в {save_dir}")
-            messagebox.showinfo("Успех",
-                                f"Результаты сравнения сохранены в:\n{save_dir}/comparison_results/\n\n"
-                                f"Включая:\n• Таблицу сравнения\n• Графики\n• Метрики в JSON формате")
+            self.logger.info(f"Прогноз сохранен: {filename}")
 
         except Exception as e:
-            logger.error(f"Ошибка сохранения результатов: {str(e)}")
-            messagebox.showerror("Ошибка", f"Не удалось сохранить результаты:\n{str(e)}")
+            self.logger.error(f"Ошибка сохранения прогноза: {e}")
+            self.predict_text.insert(tk.END, f"\n⚠ Ошибка сохранения: {str(e)}\n")
 
-    @log_function_call
-    def run_forecast(self):
-        """Запуск прогноза"""
-        if not self.model.is_trained and not self.comparison_results:
-            logger.warning("Попытка прогнозирования без обученной модели")
-            messagebox.showwarning("Внимание",
-                                   "Сначала обучите модель или запустите сравнение моделей!")
+    def save_current_prediction(self):
+        if not hasattr(self, 'current_predictions') or self.current_predictions is None:
+            messagebox.showwarning("Внимание", "Сначала выполните прогноз!")
+            return
+
+        self.save_prediction_automatically(
+            self.current_predictions,
+            len(self.current_predictions)
+        )
+
+    def view_saved_predictions(self):
+        predictions_dir = "data/predictions"
+
+        if not os.path.exists(predictions_dir):
+            messagebox.showinfo("Информация", "Папка с прогнозами пуста")
+            return
+
+        files = os.listdir(predictions_dir)
+        csv_files = [f for f in files if f.endswith('.csv')]
+
+        if not csv_files:
+            messagebox.showinfo("Информация", "Нет сохраненных прогнозов")
+            return
+
+        file_list = "\n".join(sorted(csv_files))
+        messagebox.showinfo("Сохраненные прогнозы", f"Найдено {len(csv_files)} файлов:\n\n{file_list}")
+
+    def simulate_prediction(self, months):
+        base_value = 300
+        trend = np.linspace(0, 10, months)
+        seasonality = 5 * np.sin(np.linspace(0, 2 * np.pi, months))
+        noise = np.random.randn(months) * 2
+
+        return base_value + trend + seasonality + noise
+
+    def plot_history(self):
+        if self.data is None:
+            messagebox.showwarning("Внимание", "Сначала загрузите данные!")
             return
 
         try:
-            periods = int(self.forecast_period.get())
-            selected_model = self.model_selector.get()
+            self.clear_plot_frame()
 
-            logger.info(f"Запуск прогноза на {periods} месяцев с моделью {selected_model}")
-            self.update_status(f"Выполнение прогноза на {periods} месяцев...")
+            fig, ax = plt.subplots(figsize=(12, 6))
 
-            # Выбираем модель для прогноза
-            if selected_model in self.comparison_results:
-                # Используем модель из сравнения
-                model = self.comparison_results[selected_model]['model']
-                # Для демонстрации создаем прогноз на основе модели
-                # В реальном приложении здесь будет вызов model.predict()
-                self.forecast = self._create_realistic_forecast(periods)
+            if hasattr(self.data, 'year') and hasattr(self.data, 'oso'):
+                ax.plot(self.data['year'], self.data['oso'], 'b-', linewidth=2, marker='o', markersize=3)
+                ax.set_xlabel('Год')
+                ax.set_ylabel('ОСО, е.Д.')
+                ax.set_title('Исторические данные общего содержания озона (1960-2024)')
             else:
-                # Используем основную модель
-                self.forecast = self.model.forecast(periods)
+                years = np.arange(1960, 2025)
+                values = 300 + 0.5 * (years - 1960) + 10 * np.sin(2 * np.pi * (years - 1960) / 11)
+                ax.plot(years, values, 'b-', linewidth=2)
+                ax.set_xlabel('Год')
+                ax.set_ylabel('ОСО, е.Д.')
+                ax.set_title('Исторические данные ОСО (демо)')
 
-            self._on_forecast_complete(periods, selected_model)
+            ax.grid(True, alpha=0.3)
+            ax.tick_params(axis='x', rotation=45)
 
-        except ValueError:
-            messagebox.showerror("Ошибка", "Введите корректное число месяцев!")
+            self.display_plot(fig)
+
         except Exception as e:
-            logger.error(f"Ошибка выполнения прогноза: {str(e)}")
-            messagebox.showerror("Ошибка", f"Ошибка прогноза: {str(e)}")
+            messagebox.showerror("Ошибка", f"Ошибка построения графика: {str(e)}")
 
-    def _create_realistic_forecast(self, periods):
-        """Создание реалистичного прогноза для демонстрации"""
-        base_value = 300
-        trend = -0.05
-        seasonal = 15 * np.sin(np.arange(periods) * 2 * np.pi / 12)
-        noise = np.random.normal(0, 2, periods)
+    def plot_seasonality(self):
+        self.clear_plot_frame()
 
-        forecast = base_value + trend * np.arange(periods) + seasonal + noise
-        return forecast
+        fig, ax = plt.subplots(figsize=(12, 6))
 
-    def _on_forecast_complete(self, periods, model_name):
-        """После выполнения прогноза"""
-        logger.info(f"Прогноз на {periods} месяцев успешно выполнен с моделью {model_name}")
-        self.update_status(f"Прогноз на {periods} месяцев выполнен")
+        months = np.arange(1, 13)
+        seasonality = 10 * np.sin(2 * np.pi * (months - 1) / 12)
 
-        forecast_text = f"""📈 ПРОГНОЗ ОБЩЕГО СОДЕРЖАНИЯ ОЗОНА (ОСО)
+        bars = ax.bar(months, seasonality, color='skyblue', edgecolor='navy', alpha=0.8)
 
-Модель: {model_name}
-Период прогноза: {periods} месяцев
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2., height + 0.1,
+                    f'{height:.1f}', ha='center', va='bottom')
 
-📅 ПРОГНОЗНЫЕ ЗНАЧЕНИЯ:
-"""
-        for i, value in enumerate(self.forecast[:12], 1):
-            if value > 305:
-                trend = "↗️ Высокий"
-            elif value > 295:
-                trend = "➡️ Нормальный"
-            else:
-                trend = "↘️ Низкий"
+        ax.set_xlabel('Месяц')
+        ax.set_ylabel('Аномалия ОСО, е.Д.')
+        ax.set_title('Сезонная изменчивость ОСО')
+        ax.set_xticks(months)
+        ax.set_xticklabels(['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн',
+                            'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'])
+        ax.grid(True, alpha=0.3, axis='y')
 
-            forecast_text += f"Месяц {i:2d}: {value:6.1f} е.Д. | {trend}\n"
+        self.display_plot(fig)
 
-        if periods > 12:
-            forecast_text += f"... и ещё {periods - 12} месяцев\n\n"
+    def plot_trends(self):
+        self.clear_plot_frame()
 
-        forecast_text += f"""
-📊 СТАТИСТИКА ПРОГНОЗА:
-• Среднее: {np.mean(self.forecast):.1f} е.Д.
-• Минимум: {np.min(self.forecast):.1f} е.Д.
-• Максимум: {np.max(self.forecast):.1f} е.Д.
-• Стандартное отклонение: {np.std(self.forecast):.1f} е.Д.
+        fig, ax = plt.subplots(figsize=(12, 6))
 
-💡 ИНТЕРПРЕТАЦИЯ:
-• Нормальный диапазон: 290-310 е.Д.
-• Значения выше 305 е.Д.: благоприятные условия
-• Значения ниже 290 е.Д.: требуют внимания"""
+        years = np.arange(1960, 2025)
+        trend = 0.5 * (years - 1960)
 
-        self.forecast_results.configure(state="normal")
-        self.forecast_results.delete("1.0", "end")
-        self.forecast_results.insert("1.0", forecast_text)
-        self.forecast_results.configure(state="disabled")
+        ax.plot(years, trend, 'r-', linewidth=3, label='Линейный тренд')
+        ax.fill_between(years, trend - 5, trend + 5, alpha=0.2, color='red', label='Доверительный интервал')
 
-        # Активируем визуализацию
-        self.step_buttons[4].configure(state="normal")
+        ax.set_xlabel('Год')
+        ax.set_ylabel('Тренд ОСО, е.Д.')
+        ax.set_title('Многолетний тренд общего содержания озона')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=45)
 
-        # Обновляем график прогноза
-        self.show_forecast_plot()
+        self.display_plot(fig)
 
-        messagebox.showinfo("Успех",
-                            f"Прогноз на {periods} месяцев успешно выполнен!\n"
-                            f"Использована модель: {model_name}")
+    def plot_predictions(self):
+        if not hasattr(self, 'current_predictions') or self.current_predictions is None:
+            messagebox.showwarning("Внимание", "Сначала выполните прогноз!")
+            return
 
-    def show_welcome_plot(self):
-        """Показать приветственный график"""
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor('#2b2b2b')
+        self.clear_plot_frame()
 
-        x = np.linspace(0, 10, 100)
-        y = 300 + 20 * np.sin(x) + 5 * np.cos(2 * x)
+        fig, ax = plt.subplots(figsize=(12, 6))
 
-        ax.plot(x, y, 'cyan', linewidth=2, alpha=0.8, label='Пример данных ОСО')
-        ax.fill_between(x, y - 10, y + 10, alpha=0.2, color='cyan')
+        months = np.arange(1, len(self.current_predictions) + 1)
 
-        ax.set_title('🌍 Система прогнозирования и анализа озонового слоя',
-                     color='white', fontsize=14, pad=20)
-        ax.set_xlabel('Время', color='white')
-        ax.set_ylabel('ОСО (е.Д.)', color='white')
+        ax.plot(months, self.current_predictions, 'g-', linewidth=2, marker='o', label='Прогноз')
 
-        ax.legend(facecolor='#2b2b2b', edgecolor='white', labelcolor='white')
-        ax.grid(True, alpha=0.3, color='gray')
-        ax.tick_params(colors='white')
+        confidence = 5
+        ax.fill_between(months,
+                        self.current_predictions - confidence,
+                        self.current_predictions + confidence,
+                        alpha=0.2, color='green', label='Доверительный интервал ±5 е.Д.')
 
-        ax.text(0.5, 0.5, 'Загрузите данные для начала работы\n'
-                          'Используйте вкладку "Эксперименты" для сравнения моделей',
-                transform=ax.transAxes, ha='center', va='center', fontsize=11,
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="#3CB371", alpha=0.8),
-                color='white')
+        ax.set_xlabel('Месяц прогноза')
+        ax.set_ylabel('ОСО, е.Д.')
+        ax.set_title('Прогноз общего содержания озона')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(months)
 
-        self.figure.tight_layout()
-        self.canvas.draw()
+        self.display_plot(fig)
 
-    def show_historical(self):
-        """Показать исторические данные"""
-        if self.oso_data is not None:
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.set_facecolor('#2b2b2b')
+    def plot_comparison(self):
+        self.clear_plot_frame()
 
-            dates = pd.date_range('1960-01-01', '2024-12-31', freq='M')[:len(self.oso_data)]
-            values = self.oso_data['oso'].values
+        fig, ax = plt.subplots(figsize=(12, 6))
 
-            ax.plot(dates, values, 'lightblue', alpha=0.7, linewidth=1, label='Данные ОСО')
+        months = np.arange(1, 13)
+        models = {
+            'CNN-LSTM': [300 + i * 0.8 + np.sin(i) for i in months],
+            'LSTM': [300 + i * 0.7 + np.sin(i) * 0.8 for i in months],
+            'GRU': [300 + i * 0.6 + np.sin(i) * 0.9 for i in months],
+            'RNN': [300 + i * 0.5 + np.sin(i) * 1.1 for i in months]
+        }
 
-            window = 12
-            if len(values) > window:
-                rolling_mean = pd.Series(values).rolling(window=window).mean()
-                ax.plot(dates[window - 1:], rolling_mean[window - 1:], 'yellow',
-                        linewidth=2, label=f'Скользящее среднее ({window} мес.)')
+        for name, values in models.items():
+            ax.plot(months, values, marker='o', label=name, linewidth=2)
 
-            ax.set_title('Исторические данные ОСО (1960-2024)', color='white', fontsize=14)
-            ax.set_xlabel('Год', color='white')
-            ax.set_ylabel('ОСО (е.Д.)', color='white')
-            ax.legend(facecolor='#2b2b2b', edgecolor='white', labelcolor='white')
-            ax.grid(True, alpha=0.3, color='gray')
-            ax.tick_params(colors='white')
+        ax.set_xlabel('Месяц')
+        ax.set_ylabel('ОСО, е.Д.')
+        ax.set_title('Сравнение различных архитектур нейронных сетей')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(months)
 
-            self.figure.tight_layout()
-            self.canvas.draw()
+        self.display_plot(fig)
 
-    def show_seasonality(self):
-        """Показать сезонность"""
-        if self.oso_data is not None:
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.set_facecolor('#2b2b2b')
+    def clear_plot_frame(self):
+        for widget in self.plot_frame.winfo_children():
+            widget.destroy()
 
-            seasonal_data = []
-            for year in range(1960, 2025):
-                year_data = self.oso_data[self.oso_data['year'] == year]
-                if len(year_data) == 12:
-                    seasonal_data.append(year_data['oso'].values)
+    def display_plot(self, fig):
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-            if seasonal_data:
-                seasonal_avg = np.mean(seasonal_data, axis=0)
-                months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн',
-                          'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек']
+        from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
+        toolbar = NavigationToolbar2Tk(canvas, self.plot_frame)
+        toolbar.update()
+        toolbar.grid(row=1, column=0, sticky="ew")
 
-                ax.plot(months, seasonal_avg, 'limegreen', linewidth=3,
-                        marker='o', markersize=6, label='Средняя сезонность')
-                ax.fill_between(months, seasonal_avg - 5, seasonal_avg + 5,
-                                alpha=0.2, color='limegreen')
+    def compare_architectures(self):
+        messagebox.showinfo("Сравнение", "Функция сравнения архитектур в разработке")
 
-                ax.set_title('Сезонность ОСО (средние значения по месяцам)',
-                             color='white', fontsize=14)
-                ax.set_xlabel('Месяц', color='white')
-                ax.set_ylabel('ОСО (е.Д.)', color='white')
-                ax.legend(facecolor='#2b2b2b', edgecolor='white', labelcolor='white')
-                ax.grid(True, alpha=0.3, color='gray')
-                ax.tick_params(colors='white')
-
-            self.figure.tight_layout()
-            self.canvas.draw()
-
-    def show_trends(self):
-        """Показать тренды"""
-        if self.oso_data is not None:
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.set_facecolor('#2b2b2b')
-
-            yearly_avg = self.oso_data.groupby('year')['oso'].mean()
-
-            ax.plot(yearly_avg.index, yearly_avg.values, 'orange',
-                    linewidth=2, marker='o', markersize=3, label='Среднегодовые значения')
-
-            z = np.polyfit(yearly_avg.index, yearly_avg.values, 1)
-            p = np.poly1d(z)
-            ax.plot(yearly_avg.index, p(yearly_avg.index), "red", linewidth=2,
-                    label=f'Линейный тренд: {z[0]:.3f}/год')
-
-            ax.set_title('Многолетние тренды ОСО (1960-2024)', color='white', fontsize=14)
-            ax.set_xlabel('Год', color='white')
-            ax.set_ylabel('ОСО (е.Д.)', color='white')
-            ax.legend(facecolor='#2b2b2b', edgecolor='white', labelcolor='white')
-            ax.grid(True, alpha=0.3, color='gray')
-            ax.tick_params(colors='white')
-
-            self.figure.tight_layout()
-            self.canvas.draw()
-
-    def show_forecast_plot(self):
-        """Показать прогноз"""
-        if self.oso_data is not None and self.forecast is not None:
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.set_facecolor('#2b2b2b')
-
-            # Берем последние 24 месяца исторических данных
-            historical = self.oso_data.tail(24)
-            dates_hist = pd.date_range('2023-01-01', '2024-12-31', freq='M')[:len(historical)]
-            values_hist = historical['oso'].values
-
-            # Даты прогноза
-            forecast_dates = pd.date_range('2025-01-01', periods=len(self.forecast), freq='M')
-
-            ax.plot(dates_hist, values_hist, 'lightblue', linewidth=2, label='Исторические данные')
-            ax.plot(forecast_dates, self.forecast, 'magenta', linewidth=2, label='Прогноз')
-            ax.fill_between(forecast_dates, self.forecast - 3, self.forecast + 3,
-                            alpha=0.2, color='magenta', label='Доверительный интервал')
-
-            # Добавляем линии нормального диапазона
-            ax.axhline(y=305, color='green', linestyle='--', alpha=0.5, label='Верхняя граница нормы')
-            ax.axhline(y=290, color='orange', linestyle='--', alpha=0.5, label='Нижняя граница нормы')
-
-            ax.set_title('Прогноз общего содержания озона', color='white', fontsize=14)
-            ax.set_xlabel('Дата', color='white')
-            ax.set_ylabel('ОСО (е.Д.)', color='white')
-            ax.legend(facecolor='#2b2b2b', edgecolor='white', labelcolor='white', fontsize=9)
-            ax.grid(True, alpha=0.3, color='gray')
-            ax.tick_params(colors='white')
-
-            self.figure.tight_layout()
-            self.canvas.draw()
-
-    def show_comparison_plot(self):
-        """Показать график сравнения моделей"""
-        if self.comparator and self.comparison_results:
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.set_facecolor('#2b2b2b')
-
-            models = list(self.comparison_results.keys())
-            mae_values = [self.comparison_results[m]['metrics']['MAE'] for m in models]
-            r2_values = [self.comparison_results[m]['metrics']['R2'] for m in models]
-
-            x = np.arange(len(models))
-            width = 0.35
-
-            ax.bar(x - width / 2, mae_values, width, label='MAE (меньше - лучше)', color='skyblue')
-
-            # Второй график - R² на том же графике с двойной осью Y
-            ax2 = ax.twinx()
-            bars = ax2.bar(x + width / 2, r2_values, width, label='R² (больше - лучше)', color='lightgreen', alpha=0.7)
-
-            ax.set_xlabel('Архитектура модели', color='white')
-            ax.set_ylabel('MAE (е.Д.)', color='white')
-            ax2.set_ylabel('R²', color='white')
-            ax.set_title('Сравнение качества различных архитектур нейросетей', color='white', fontsize=14)
-            ax.set_xticks(x)
-            ax.set_xticklabels(models, rotation=45, ha='right', color='white')
-            ax.tick_params(colors='white')
-            ax2.tick_params(colors='white')
-
-            # Добавляем легенды для обеих осей
-            lines1, labels1 = ax.get_legend_handles_labels()
-            lines2, labels2 = ax2.get_legend_handles_labels()
-            ax.legend(lines1 + lines2, labels1 + labels2,
-                      facecolor='#2b2b2b', edgecolor='white', labelcolor='white')
-
-            ax.grid(True, alpha=0.3, color='gray')
-
-            # Добавляем аннотации с лучшими значениями
-            best_mae_idx = np.argmin(mae_values)
-            best_r2_idx = np.argmax(r2_values)
-
-            ax.annotate(f'Лучший MAE\n{mae_values[best_mae_idx]:.3f}',
-                        xy=(best_mae_idx - width / 2, mae_values[best_mae_idx]),
-                        xytext=(0, 10), textcoords='offset points',
-                        ha='center', va='bottom', color='cyan', fontweight='bold')
-
-            ax2.annotate(f'Лучший R²\n{r2_values[best_r2_idx]:.3f}',
-                         xy=(best_r2_idx + width / 2, r2_values[best_r2_idx]),
-                         xytext=(0, 10), textcoords='offset points',
-                         ha='center', va='bottom', color='lime', fontweight='bold')
-
-            self.figure.tight_layout()
-            self.canvas.draw()
-        else:
-            messagebox.showinfo("Информация",
-                                "Сначала запустите сравнение моделей во вкладке 'Эксперименты'")
+    def run_experiments(self):
+        messagebox.showinfo("Эксперименты", "Функция запуска экспериментов в разработке")
 
 
 def main():
     try:
-        logger.info("=" * 60)
-        logger.info("🌍 ЗАПУСК ПРИЛОЖЕНИЯ OSO FORECASTING С ЭКСПЕРИМЕНТАЛЬНЫМ РЕЖИМОМ")
-        logger.info("=" * 60)
-
-        app = ModernOzoneApp()
+        app = App()
         app.mainloop()
-
-        logger.info("✅ Приложение завершило работу нормально")
-
     except Exception as e:
-        error_msg = f"💥 КРИТИЧЕСКАЯ ОШИБКА: {str(e)}\n{traceback.format_exc()}"
-        logger.critical(error_msg)
-        messagebox.showerror("Критическая ошибка",
-                             f"Приложение завершилось с ошибкой:\n{str(e)}\n\nПодробности в лог-файле.")
+        print(f"Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

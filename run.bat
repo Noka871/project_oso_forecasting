@@ -1,23 +1,50 @@
 @echo off
-chcp 65001
+chcp 65001 >nul
 echo ========================================
-echo   🌍 OSO Forecasting - Modern Interface
+echo   Запуск OSO Forecasting Application
 echo ========================================
 echo.
 
-echo Проверка Python...
-python --version > nul 2>&1
+REM Проверка Python
+python --version >nul 2>&1
 if errorlevel 1 (
-    echo ❌ ОШИБКА: Python не установлен
-    echo Установите Python 3.8+ с python.org
+    echo Ошибка: Python не найден!
+    echo Установите Python 3.8 или выше
     pause
     exit /b 1
 )
 
+REM Проверка и установка зависимостей
 echo Установка/проверка зависимостей...
 pip install -r requirements.txt
 
-echo Запуск современного интерфейса...
+if errorlevel 1 (
+    echo Ошибка при установке зависимостей!
+    pause
+    exit /b 1
+)
+
+REM Создание необходимых папок
+echo Создание структуры папок...
+if not exist "data\predictions" mkdir data\predictions
+if not exist "trained_models" mkdir trained_models
+if not exist "logs" mkdir logs
+
+REM Обновление pip (опционально)
+echo.
+echo Обновление pip (рекомендуется)...
+python -m pip install --upgrade pip
+
+REM Запуск приложения
+echo.
+echo ========================================
+echo   Запуск приложения...
+echo ========================================
+echo.
 python main.py
 
-pause
+if errorlevel 1 (
+    echo.
+    echo Приложение завершилось с ошибкой
+    pause
+)

@@ -1,154 +1,385 @@
+"""
+ozone_model.py
+Реализация гибридной нейросетевой модели CNN-LSTM для прогнозирования ОСО
+"""
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv1D, LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
-from utils.logger import log_function_call, log_model_training, logger
+from datetime import datetime
+import os
 
 
-class OzoneHybridModel:
-    def __init__(self):
+class OzoneModel:
+    """
+    Гибридная модель CNN-LSTM для прогнозирования общего содержания озона (ОСО)
+    """
+
+    def __init__(self, input_shape=(12, 1), model_path=None):
+        """
+        Инициализация модели
+
+        Args:
+            input_shape: форма входных данных (последовательность, признаки)
+            model_path: путь к сохраненной модели (если есть)
+        """
+        self.input_shape = input_shape
         self.model = None
-        self.is_trained = False
-        self.metrics = {}
         self.history = None
-        logger.info("Инициализирована модель OzoneHybridModel")
 
-    def build_model(self, input_shape):
-        """Создание гибридной модели Conv1D + LSTM"""
-        logger.info(f"Построение модели с входной формой: {input_shape}")
+        # Если указан путь к модели, загружаем ее
+        if model_path and os.path.exists(model_path):
+            self.load_model(model_path)
+        else:
+            self.build_model()
 
-        model = Sequential([
-            Conv1D(filters=64, kernel_size=3, activation='relu',
-                   input_shape=input_shape),
-            LSTM(128, return_sequences=False),
-            Dense(64, activation='relu'),
-            Dropout(0.3),
-            Dense(32, activation='relu'),
-            Dense(1)
+    def build_model(self):
+        """Построение архитектуры гибридной модели CNN-LSTM"""
+        model = keras.Sequential([
+            # Входной слой
+            layers.Input(shape=self.input_shape),
+
+            # Conv1D слой для выявления локальных паттернов
+            layers.Conv1D(filters=64, kernel_size=3, activation='relu',
+                          padding='same', name='conv1d_layer'),
+
+            # MaxPooling для уменьшения размерности
+            layers.MaxPooling1D(pool_size=2, name='maxpool_layer'),
+
+            # LSTM слой для учета временных зависимостей
+            layers.LSTM(128, return_sequences=False, name='lstm_layer'),
+
+            # Полносвязные слои
+            layers.Dense(64, activation='relu', name='dense_64'),
+            layers.Dropout(0.3, name='dropout_30'),
+            layers.Dense(32, activation='relu', name='dense_32'),
+
+            # Выходной слой (1 значение прогноза)
+            layers.Dense(1, name='output_layer')
         ])
 
+        # Компиляция модели
         model.compile(
-            optimizer=Adam(learning_rate=0.001),
-            loss='mse',
-            metrics=['mae']
+            optimizer=keras.optimizers.Adam(learning_rate=0.001),
+            loss='mse',  # Mean Squared Error
+            metrics=['mae', 'mse']  # Mean Absolute Error, Mean Squared Error
         )
 
-        logger.info("Модель успешно скомпилирована")
+        self.model = model
+        print("[OzoneModel] Модель успешно построена")
+        print(f"[OzoneModel] Архитектура: CNN-LSTM")
+        print(f"[OzoneModel] Параметры: {self.model.count_params():,} параметров")
+
         return model
 
-    @log_function_call
-    def prepare_data(self, data, sequence_length=12):
-        """Подготовка данных для обучения"""
-        values = data['oso'].values
-        logger.info(f"Подготовка данных: {len(values)} точек, длина последовательности: {sequence_length}")
+    def summary(self):
+        """Вывод информации о модели"""
+        if self.model:
+            return self.model.summary()
+        else:
+            print("[OzoneModel] Модель не построена")
 
-        X, y = [], []
-        for i in range(len(values) - sequence_length):
-            X.append(values[i:(i + sequence_length)])
-            y.append(values[i + sequence_length])
+    def train(self, X_train, y_train, X_val=None, y_val=None,
+              epochs=50, batch_size=32, validation_split=0.2):
+        """
+        Обучение модели
 
-        X = np.array(X)
-        y = np.array(y)
+        Args:
+            X_train: тренировочные данные
+            y_train: целевые значения тренировочных данных
+            X_val: валидационные данные (опционально)
+            y_val: целевые значения валидационных данных (опционально)
+            epochs: количество эпох обучения
+            batch_size: размер батча
+            validation_split: доля данных для валидации (если X_val не указан)
 
-        X = X.reshape((X.shape[0], X.shape[1], 1))
+        Returns:
+            history: история обучения
+        """
+        if not self.model:
+            self.build_model()
 
-        logger.info(f"Данные подготовлены: X.shape={X.shape}, y.shape={y.shape}")
-        return X, y
+        # Подготовка данных для валидации
+        validation_data = None
+        if X_val is not None and y_val is not None:
+            validation_data = (X_val, y_val)
+            validation_split = None
 
-    @log_model_training("OzoneHybridModel (Conv1D + LSTM)")
-    def train(self, data, epochs=50, validation_split=0.2):
-        """Обучение модели"""
-        try:
-            # Подготовка данных
-            X, y = self.prepare_data(data)
+        print(f"[OzoneModel] Начало обучения...")
+        print(f"[OzoneModel] Эпохи: {epochs}, Батч: {batch_size}")
 
-            # Разделение на train/validation
-            split_idx = int(len(X) * (1 - validation_split))
-            X_train, X_val = X[:split_idx], X[split_idx:]
-            y_train, y_val = y[:split_idx], y[split_idx:]
+        # Обучение модели
+        self.history = self.model.fit(
+            X_train, y_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_split=validation_split,
+            validation_data=validation_data,
+            verbose=1
+        )
 
-            logger.info(f"Разделение данных: train={X_train.shape}, validation={X_val.shape}")
+        print(f"[OzoneModel] Обучение завершено")
+        print(f"[OzoneModel] Финальный loss: {self.history.history['loss'][-1]:.4f}")
+        if 'val_loss' in self.history.history:
+            print(f"[OzoneModel] Финальный val_loss: {self.history.history['val_loss'][-1]:.4f}")
 
-            # Построение модели
-            self.model = self.build_model((X_train.shape[1], X_train.shape[2]))
+        return self.history
 
-            logger.info(f"Начало обучения на {epochs} эпох")
+    def predict(self, X):
+        """
+        Прогнозирование
 
-            # Обучение
-            self.history = self.model.fit(
-                X_train, y_train,
-                validation_data=(X_val, y_val),
-                epochs=epochs,
-                batch_size=32,
-                verbose=0,
-                callbacks=[TrainingLoggerCallback()]
-            )
+        Args:
+            X: входные данные для прогноза
 
-            # Оценка модели
-            logger.info("Оценка качества модели...")
-            y_pred = self.model.predict(X_val)
+        Returns:
+            predictions: массив прогнозов
+        """
+        if not self.model:
+            raise ValueError("[OzoneModel] Модель не обучена. Сначала обучите модель.")
 
-            self.metrics = {
-                'mae': mean_absolute_error(y_val, y_pred),
-                'rmse': np.sqrt(mean_squared_error(y_val, y_pred)),
-                'accuracy': 1 - mean_absolute_error(y_val, y_pred) / np.mean(y_val)
-            }
+        # Преобразуем входные данные, если нужно
+        if len(X.shape) == 1:
+            X = X.reshape(1, -1, 1)
+        elif len(X.shape) == 2:
+            X = X.reshape(X.shape[0], X.shape[1], 1)
 
-            self.is_trained = True
+        predictions = self.model.predict(X, verbose=0)
+        return predictions.flatten()
 
-            logger.info(f"Обучение завершено! Метрики: MAE={self.metrics['mae']:.3f}, RMSE={self.metrics['rmse']:.3f}")
+    def evaluate(self, X_test, y_test):
+        """
+        Оценка модели на тестовых данных
 
-            return self.history
+        Args:
+            X_test: тестовые данные
+            y_test: целевые значения тестовых данных
 
-        except Exception as e:
-            logger.error(f"Ошибка обучения модели: {str(e)}")
-            self._create_stub_model()
-            return None
+        Returns:
+            metrics: словарь с метриками
+        """
+        if not self.model:
+            raise ValueError("[OzoneModel] Модель не обучена.")
 
-    def _create_stub_model(self):
-        """Создание заглушки для демонстрации"""
-        logger.warning("Создание демонстрационной модели (заглушки)")
-        self.metrics = {
-            'mae': 2.1,
-            'rmse': 3.4,
-            'accuracy': 0.952
+        # Преобразуем данные, если нужно
+        if len(X_test.shape) == 2:
+            X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
+        # Оценка модели
+        loss, mae, mse = self.model.evaluate(X_test, y_test, verbose=0)
+
+        metrics = {
+            'loss': loss,
+            'mae': mae,
+            'mse': mse,
+            'rmse': np.sqrt(mse)
         }
-        self.is_trained = True
 
-    @log_function_call
-    def forecast(self, periods=12):
-        """Прогнозирование"""
-        if not self.is_trained:
-            logger.error("Попытка прогнозирования без обученной модели")
-            raise Exception("Модель не обучена! Сначала вызовите train()")
+        print(f"[OzoneModel] Оценка модели:")
+        print(f"  Loss: {loss:.4f}")
+        print(f"  MAE: {mae:.4f}")
+        print(f"  MSE: {mse:.4f}")
+        print(f"  RMSE: {np.sqrt(mse):.4f}")
 
-        logger.info(f"Выполнение прогноза на {periods} периодов")
+        return metrics
 
-        # Для демонстрации создаем реалистичный прогноз
-        base_value = 300
-        trend = -0.1
-        seasonal = 15 * np.sin(np.arange(periods) * 2 * np.pi / 12)
-        noise = np.random.normal(0, 2, periods)
+    def save_model(self, filepath="trained_models/ozone_model.h5"):
+        """
+        Сохранение модели
 
-        forecast = base_value + trend * np.arange(periods) + seasonal + noise
+        Args:
+            filepath: путь для сохранения модели
+        """
+        if not self.model:
+            raise ValueError("[OzoneModel] Нет модели для сохранения.")
 
-        logger.info(f"Прогноз выполнен: среднее значение={np.mean(forecast):.1f}")
+        # Создаем папку, если она не существует
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
-        return forecast
+        # Сохраняем модель
+        self.model.save(filepath)
+        print(f"[OzoneModel] Модель сохранена: {filepath}")
+
+        # Также сохраняем историю обучения, если есть
+        if self.history:
+            history_file = filepath.replace('.h5', '_history.json')
+            history_df = pd.DataFrame(self.history.history)
+            history_df.to_json(history_file, indent=2)
+            print(f"[OzoneModel] История обучения сохранена: {history_file}")
+
+    def load_model(self, filepath):
+        """
+        Загрузка модели
+
+        Args:
+            filepath: путь к файлу модели
+        """
+        if os.path.exists(filepath):
+            self.model = keras.models.load_model(filepath)
+            print(f"[OzoneModel] Модель загружена: {filepath}")
+            print(f"[OzoneModel] Архитектура: {self.model.name}")
+            print(f"[OzoneModel] Параметры: {self.model.count_params():,}")
+        else:
+            print(f"[OzoneModel] Файл модели не найден: {filepath}")
+            print("[OzoneModel] Будет построена новая модель.")
+            self.build_model()
 
 
-class TrainingLoggerCallback(tf.keras.callbacks.Callback):
-    """Кастомный callback для логирования процесса обучения"""
+class DataPreprocessor:
+    """
+    Класс для предобработки данных ОСО
+    """
 
-    def on_epoch_end(self, epoch, logs=None):
-        if epoch % 10 == 0:  # Логируем каждые 10 эпох
-            logger.debug(f"Эпоха {epoch}: loss={logs['loss']:.4f}, val_loss={logs['val_loss']:.4f}")
+    @staticmethod
+    def prepare_sequences(data, sequence_length=12):
+        """
+        Подготовка последовательностей для обучения
 
-    def on_train_begin(self, logs=None):
-        logger.info("🎯 Начало обучения нейросети")
+        Args:
+            data: массив данных временного ряда
+            sequence_length: длина последовательности
 
-    def on_train_end(self, logs=None):
-        logger.info("🏁 Обучение нейросети завершено")
+        Returns:
+            X, y: массивы признаков и целевых значений
+        """
+        X, y = [], []
+
+        for i in range(len(data) - sequence_length):
+            X.append(data[i:i + sequence_length])
+            y.append(data[i + sequence_length])
+
+        return np.array(X), np.array(y)
+
+    @staticmethod
+    def normalize_data(data):
+        """
+        Нормализация данных
+
+        Args:
+            data: массив данных
+
+        Returns:
+            normalized_data: нормализованные данные
+            scaler_params: параметры нормализации для обратного преобразования
+        """
+        data_min = np.min(data)
+        data_max = np.max(data)
+
+        # Избегаем деления на ноль
+        if data_max == data_min:
+            normalized_data = np.zeros_like(data)
+        else:
+            normalized_data = (data - data_min) / (data_max - data_min)
+
+        scaler_params = {
+            'min': data_min,
+            'max': data_max
+        }
+
+        return normalized_data, scaler_params
+
+    @staticmethod
+    def denormalize_data(normalized_data, scaler_params):
+        """
+        Обратное преобразование нормализованных данных
+
+        Args:
+            normalized_data: нормализованные данные
+            scaler_params: параметры нормализации
+
+        Returns:
+            original_data: данные в исходном масштабе
+        """
+        data_min = scaler_params['min']
+        data_max = scaler_params['max']
+
+        return normalized_data * (data_max - data_min) + data_min
+
+
+# Функция для создания демонстрационных данных
+def create_demo_data(num_samples=1000):
+    """
+    Создание демонстрационных данных для тестирования модели
+
+    Args:
+        num_samples: количество образцов данных
+
+    Returns:
+        X, y: демонстрационные данные
+    """
+    # Генерация временного ряда с трендом и сезонностью
+    time = np.arange(num_samples)
+    trend = 0.01 * time
+    seasonality = 10 * np.sin(2 * np.pi * time / 12)  # Годовая сезонность
+    noise = np.random.normal(0, 1, num_samples)
+
+    # Исходные данные ОСО (условные единицы)
+    ozone_data = 300 + trend + seasonality + noise
+
+    # Подготовка последовательностей
+    preprocessor = DataPreprocessor()
+    X, y = preprocessor.prepare_sequences(ozone_data, sequence_length=12)
+
+    # Нормализация
+    X_normalized, scaler_params = preprocessor.normalize_data(X)
+    y_normalized, _ = preprocessor.normalize_data(y)
+
+    # Reshape для CNN-LSTM (samples, timesteps, features)
+    X_reshaped = X_normalized.reshape(X_normalized.shape[0], X_normalized.shape[1], 1)
+
+    return X_reshaped, y_normalized, scaler_params, ozone_data
+
+
+# Пример использования
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Тестирование модели OzoneModel")
+    print("=" * 60)
+
+    # Создание демонстрационных данных
+    print("\n1. Создание демонстрационных данных...")
+    X, y, scaler_params, original_data = create_demo_data(1000)
+
+    print(f"   Размер X: {X.shape}")
+    print(f"   Размер y: {y.shape}")
+
+    # Разделение на train/test
+    split_idx = int(0.8 * len(X))
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
+
+    print(f"   Train: {X_train.shape[0]} samples")
+    print(f"   Test: {X_test.shape[0]} samples")
+
+    # Создание и обучение модели
+    print("\n2. Создание модели...")
+    model = OzoneModel(input_shape=(12, 1))
+    model.summary()
+
+    print("\n3. Обучение модели (быстрая демо - 5 эпох)...")
+    history = model.train(
+        X_train, y_train,
+        X_val=X_test, y_val=y_test,
+        epochs=5, batch_size=32
+    )
+
+    print("\n4. Оценка модели...")
+    metrics = model.evaluate(X_test, y_test)
+
+    print("\n5. Прогнозирование...")
+    # Прогноз для последней последовательности
+    last_sequence = X_test[-1:].reshape(1, 12, 1)
+    prediction_normalized = model.predict(last_sequence)
+
+    # Обратное преобразование
+    prediction = DataPreprocessor.denormalize_data(
+        prediction_normalized, scaler_params
+    )
+
+    print(f"   Прогноз: {prediction[0]:.2f} е.Д.")
+
+    print("\n" + "=" * 60)
+    print("Тестирование завершено успешно!")
+    print("=" * 60)
